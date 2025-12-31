@@ -18,7 +18,7 @@ import AdminDashboardScreen from '../screens/AdminDashboardScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-const ADMIN_EMAIL = 'admin@example.com'; // عدل هذا إلى بريدك كمدير
+const ADMIN_EMAIL = 'mansouralbarour@gmail.com'; // عدل هذا إلى بريدك كمدير
 
 function AppTabs() {
   return (
