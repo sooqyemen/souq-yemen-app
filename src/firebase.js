@@ -6,12 +6,13 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: 'YOUR_API_KEY',
-  authDomain: 'YOUR_AUTH_DOMAIN',
-  projectId: 'YOUR_PROJECT_ID',
-  storageBucket: 'YOUR_STORAGE_BUCKET',
-  messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-  appId: 'YOUR_APP_ID',
+  apiKey: "AIzaSyD_LRQdmb3Kyo6NVroUMvHGnx-Ciz9OIcU",
+  authDomain: "aqarabhour-c8a9f.firebaseapp.com",
+  databaseURL: "https://aqarabhour-c8a9f-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "aqarabhour-c8a9f",
+  storageBucket: "aqarabhour-c8a9f.firebasestorage.app",
+  messagingSenderId: "709287383516",
+  appId: "1:709287383516:web:008ccd7371f88c8c8f3f19"
 };
 
 const app = initializeApp(firebaseConfig);
