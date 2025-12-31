@@ -19,7 +19,7 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // عدّل هذا لبريد المدير الذي تريد أن يدخل لوحة التحكم
-const ADMIN_EMAIL = 'admin@example.com';
+const ADMIN_EMAIL = 'mansouralbarout@gmail.com';
 
 function AppTabs() {
   return (
