@@ -1,12 +1,15 @@
+// src/navigation/RootNavigator.js
+
 import React from 'react';
+import { ActivityIndicator, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, View } from 'react-native';
+
 import { useAuth } from '../context/AuthContext';
 
+import HomeScreen from '../screens/HomeScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
-import HomeScreen from '../screens/HomeScreen';
 import ListingDetailsScreen from '../screens/ListingDetailsScreen';
 import MapScreen from '../screens/MapScreen';
 import ChatListScreen from '../screens/ChatListScreen';
@@ -18,7 +21,7 @@ import CreateListingScreen from '../screens/CreateListingScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// عدّل هذا لبريد المدير الذي تريد أن يدخل لوحة التحكم
+// هنا بريد المدير جاهز كما طلبت
 const ADMIN_EMAIL = 'mansouralbarout@gmail.com';
 
 function AppTabs() {
@@ -29,6 +32,7 @@ function AppTabs() {
         component={HomeScreen}
         options={{ title: 'الرئيسية' }}
       />
+      {/* زر إضافة إعلان يفتح شاشة CreateListingScreen الجديدة */}
       <Tab.Screen
         name="NewListing"
         component={CreateListingScreen}
@@ -70,21 +74,28 @@ export default function RootNavigator() {
     <Stack.Navigator>
       {user ? (
         <>
+          {/* تبويبات التطبيق الأساسية */}
           <Stack.Screen
             name="AppTabs"
             component={AppTabs}
             options={{ headerShown: false }}
           />
+
+          {/* تفاصيل إعلان */}
           <Stack.Screen
             name="ListingDetails"
             component={ListingDetailsScreen}
             options={{ title: 'تفاصيل الإعلان' }}
           />
+
+          {/* شاشة محادثة واحدة */}
           <Stack.Screen
             name="Chat"
             component={ChatScreen}
             options={{ title: 'المحادثة' }}
           />
+
+          {/* لوحة الإدارة تظهر فقط للمدير */}
           {isAdmin && (
             <Stack.Screen
               name="AdminDashboard"
@@ -95,6 +106,7 @@ export default function RootNavigator() {
         </>
       ) : (
         <>
+          {/* قبل تسجيل الدخول */}
           <Stack.Screen
             name="Login"
             component={LoginScreen}
