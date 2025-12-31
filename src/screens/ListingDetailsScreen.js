@@ -1,95 +1,94 @@
-// src/screens/ListingDetailsScreen.js
-
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  TextInput,
+  Image,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
-import {
-  collection,
-  doc,
-  getDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  addDoc,
-  serverTimestamp,
-  limit,
-} from 'firebase/firestore';
+import { Ionicons } from '@expo/vector-icons';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { useAuth } from '../context/AuthContext';
+import { Linking } from 'react-native';
 
-const ListingDetailsScreen = ({ route }) => {
-  const { listingId, listing: listingFromParam } = route.params || {};
-  const { user } = useAuth();
+const ListingDetailsScreen = ({ route, navigation }) => {
+  const { listing: initialListing, listingId } = route.params || {};
+  const [listing, setListing] = useState(initialListing || null);
+  const [loading, setLoading] = useState(!initialListing);
+  const [rates, setRates] = useState(null);
 
-  const [listing, setListing] = useState(listingFromParam || null);
-  const [loadingListing, setLoadingListing] = useState(!listingFromParam);
-  const [bids, setBids] = useState([]);
-  const [loadingBids, setLoadingBids] = useState(true);
-  const [bidAmount, setBidAmount] = useState('');
-  const [submittingBid, setSubmittingBid] = useState(false);
-
-  // تحميل بيانات الإعلان
+  // جلب بيانات الإعلان من Firestore لو ما وصلت كاملة من الصفحة السابقة
   useEffect(() => {
-    if (!listingId) return;
+    const fetchListing = async () => {
+      if (initialListing || !listingId) return;
 
-    const ref = doc(db, 'listings', listingId);
-    const unsub = onSnapshot(
-      ref,
-      snap => {
+      try {
+        setLoading(true);
+        const ref = doc(db, 'listings', listingId);
+        const snap = await getDoc(ref);
         if (snap.exists()) {
           setListing({ id: snap.id, ...snap.data() });
         }
-        setLoadingListing(false);
-      },
-      err => {
-        console.log('Error loading listing:', err);
-        setLoadingListing(false);
+      } catch (err) {
+        console.error('Error fetching listing:', err);
+      } finally {
+        setLoading(false);
       }
-    );
+    };
 
-    return () => unsub();
-  }, [listingId]);
+    fetchListing();
+  }, [initialListing, listingId]);
 
-  // تحميل المزايدات (أعلى 20 مزايدة)
+  // جلب أسعار الصرف من settings/rates
   useEffect(() => {
-    if (!listingId) return;
-
-    const bidsRef = collection(db, 'listings', listingId, 'bids');
-    const q = query(bidsRef, orderBy('amount', 'desc'), limit(20));
-
-    const unsub = onSnapshot(
-      q,
-      snap => {
-        const list = snap.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setBids(list);
-        setLoadingBids(false);
-      },
-      err => {
-        console.log('Error loading bids:', err);
-        setLoadingBids(false);
+    const fetchRates = async () => {
+      try {
+        const ref = doc(db, 'settings', 'rates');
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          setRates(snap.data());
+        }
+      } catch (err) {
+        console.error('Error fetching rates:', err);
       }
-    );
+    };
 
-    return () => unsub();
-  }, [listingId]);
+    fetchRates();
+  }, []);
 
-  const highestBid = useMemo(() => {
-    if (!bids.length) return null;
-    return bids[0];
-  }, [bids]);
+  const priceInfo = useMemo(() => {
+    if (!listing || listing.price == null || !rates) return null;
 
-  if (loadingListing || !listing) {
+    const price = Number(listing.price) || 0;
+    const { usdToYer = 1632, sarToYer = 425 } = rates;
+
+    // تحويل إلى ريال يمني أولاً
+    let priceYer = 0;
+
+    if (listing.currency === 'SAR') {
+      priceYer = price * sarToYer;
+    } else if (listing.currency === 'USD') {
+      priceYer = price * usdToYer;
+    } else {
+      // YER
+      priceYer = price;
+    }
+
+    const priceSar = Math.round(priceYer / sarToYer);
+    const priceUsd = Math.round(priceYer / usdToYer);
+
+    return {
+      baseCurrency: listing.currency || 'YER',
+      basePrice: price,
+      yer: priceYer,
+      sar: priceSar,
+      usd: priceUsd,
+    };
+  }, [listing, rates]);
+
+  if (loading || !listing) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" />
@@ -98,262 +97,292 @@ const ListingDetailsScreen = ({ route }) => {
     );
   }
 
-  const {
-    title,
-    description,
-    city,
-    category,
-    phone,
-    priceYER,
-    priceSAR,
-    priceUSD,
-    basePrice,
-    baseCurrency,
-    isAuction,
-    auctionEndText,
-    ownerEmail,
-    status,
-  } = listing;
+  const mainImage =
+    listing.images && Array.isArray(listing.images) && listing.images.length > 0
+      ? listing.images[0]
+      : null;
 
-  const handlePlaceBid = async () => {
-    if (!user) {
-      Alert.alert('تنبيه', 'يجب تسجيل الدخول قبل تقديم مزايدة.');
-      return;
-    }
+  const statusText = listing.status === 'inactive' ? 'مخفي' : 'نشط';
 
-    if (!isAuction) {
-      Alert.alert('تنبيه', 'هذا الإعلان غير مفعّل كمزاد.');
-      return;
-    }
-
-    const amountNum = parseFloat(bidAmount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      Alert.alert('خطأ', 'الرجاء إدخال مبلغ صحيح.');
-      return;
-    }
-
-    // يجب أن تكون المزايدة أعلى من أعلى مزايدة أو من السعر الأساسي
-    const minAllowed = highestBid ? highestBid.amount : basePrice || 0;
-    if (amountNum <= minAllowed) {
-      Alert.alert(
-        'مبلغ غير كافٍ',
-        `يجب أن تكون المزايدة أعلى من ${minAllowed}.`
-      );
-      return;
-    }
-
-    try {
-      setSubmittingBid(true);
-      const bidsRef = collection(db, 'listings', listingId, 'bids');
-      await addDoc(bidsRef, {
-        amount: amountNum,
-        userId: user.uid,
-        userEmail: user.email || '',
-        createdAt: serverTimestamp(),
-      });
-
-      setBidAmount('');
-      Alert.alert('تم', 'تم تسجيل المزايدة بنجاح.');
-    } catch (err) {
-      console.log('Error placing bid:', err);
-      Alert.alert('خطأ', 'حدث خطأ أثناء حفظ المزايدة، حاول مرة أخرى.');
-    } finally {
-      setSubmittingBid(false);
-    }
+  const openPhone = () => {
+    if (!listing.phone) return;
+    Linking.openURL(`tel:${listing.phone}`);
   };
 
-  const maskEmail = (email) => {
-    if (!email) return '';
-    const [name, domain] = email.split('@');
-    if (!domain) return email;
-    const hidden =
-      name.length <= 2 ? name[0] + '*' : name[0] + '***' + name[name.length - 1];
-    return `${hidden}@${domain}`;
+  const openWhatsApp = () => {
+    if (!listing.whatsApp && !listing.phone) return;
+    const number = String(listing.whatsApp || listing.phone).replace(
+      /[^\d]/g,
+      ''
+    );
+    const msg = encodeURIComponent('السلام عليكم، بخصوص إعلانك في سوق اليمن');
+    const url = `https://wa.me/${number}?text=${msg}`;
+    Linking.openURL(url);
+  };
+
+  const openMap = () => {
+    if (!listing.mapUrl) return;
+    Linking.openURL(listing.mapUrl);
+  };
+
+  const shareListing = () => {
+    try {
+      // في الويب نستغل window.location لو متوفر
+      if (typeof window !== 'undefined' && window.location) {
+        const url = window.location.href;
+        const text = `إعلان في سوق اليمن: ${listing.title}\n\n${url}`;
+
+        if (navigator.share) {
+          navigator.share({ title: listing.title, text, url });
+        } else if (navigator.clipboard) {
+          navigator.clipboard.writeText(url);
+          alert('تم نسخ رابط الإعلان، يمكنك لصقه وإرساله.');
+        } else {
+          alert('انسخ رابط الصفحة من شريط العنوان لمشاركته.');
+        }
+      } else {
+        alert('يمكنك مشاركة هذا الإعلان بنسخ رابط الصفحة من المتصفح.');
+      }
+    } catch (err) {
+      console.error('share error', err);
+      alert('تعذر مشاركة الإعلان حالياً.');
+    }
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>{title}</Text>
-
-      <Text style={styles.subText}>
-        {city || 'بدون مدينة'} • {category || 'قسم عام'}
-      </Text>
-
-      <View style={styles.box}>
-        <Text style={styles.boxTitle}>السعر</Text>
-        <Text style={styles.priceLine}>
-          العملة الأساسية ({baseCurrency || 'YER'}): {basePrice || '-'}
-        </Text>
-        <Text style={styles.priceLine}>
-          ﷼ يمني: {priceYER ? Math.round(priceYER) : '-'}
-        </Text>
-        <Text style={styles.priceLine}>
-          ﷼ سعودي: {priceSAR ? Math.round(priceSAR) : '-'}
-        </Text>
-        <Text style={styles.priceLine}>
-          $ دولار: {priceUSD ? Math.round(priceUSD) : '-'}
-        </Text>
-      </View>
-
-      {description ? (
-        <View style={styles.box}>
-          <Text style={styles.boxTitle}>الوصف</Text>
-          <Text style={styles.description}>{description}</Text>
+    <ScrollView style={styles.container}>
+      {/* الصورة الرئيسية */}
+      {mainImage ? (
+        <Image
+          source={{ uri: mainImage }}
+          style={styles.mainImage}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[styles.mainImage, styles.mainImagePlaceholder]}>
+          <Text style={styles.mainImagePlaceholderText}>بدون صورة</Text>
         </View>
-      ) : null}
+      )}
 
-      <View style={styles.box}>
-        <Text style={styles.boxTitle}>التواصل</Text>
-        <Text style={styles.infoLine}>
-          البريد: {ownerEmail || 'غير متوفر'}
-        </Text>
-        <Text style={styles.infoLine}>
-          الجوال: {phone || 'غير متوفر (يمكنك استخدام الدردشة)'}
-        </Text>
-      </View>
+      <View style={styles.content}>
+        {/* العنوان */}
+        <Text style={styles.title}>{listing.title}</Text>
 
-      <View style={styles.box}>
-        <Text style={styles.boxTitle}>حالة الإعلان</Text>
-        <Text style={styles.infoLine}>
-          {status === 'active' ? 'نشط' : status || 'غير محدد'}
+        <Text style={styles.subTitle}>
+          {listing.city || 'غير محدد'} • {listing.category || 'قسم غير محدد'}
         </Text>
-      </View>
 
-      {isAuction && (
-        <View style={styles.box}>
-          <Text style={styles.boxTitle}>المزاد</Text>
-          <Text style={styles.infoLine}>
-            وقت انتهاء المزاد: {auctionEndText || 'لم يتم تحديده نصياً'}
-          </Text>
-          {loadingBids ? (
-            <ActivityIndicator size="small" />
-          ) : (
+        {/* السعر */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>السعر</Text>
+          {priceInfo ? (
             <>
-              <Text style={[styles.infoLine, { marginTop: 6 }]}>
-                أعلى مزايدة حالياً:{' '}
-                {highestBid ? highestBid.amount : 'لا توجد مزايدات بعد'}
+              <Text style={styles.priceLine}>
+                العملة الأساسية ({priceInfo.baseCurrency}):{' '}
+                {priceInfo.basePrice}
               </Text>
-              {highestBid && (
-                <Text style={styles.infoLine}>
-                  مقدمة من: {maskEmail(highestBid.userEmail)}
-                </Text>
-              )}
+              <Text style={styles.priceLine}>
+                {Math.round(priceInfo.yer)} ريال يمني
+              </Text>
+              <Text style={styles.priceLine}>
+                {priceInfo.sar} ريال سعودي
+              </Text>
+              <Text style={styles.priceLine}>${priceInfo.usd} دولار</Text>
             </>
+          ) : (
+            <Text style={styles.priceLine}>لا توجد معلومات سعر كافية.</Text>
           )}
         </View>
-      )}
 
-      {isAuction && (
-        <View style={styles.box}>
-          <Text style={styles.boxTitle}>تقديم مزايدة جديدة</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="مبلغ المزايدة"
-            keyboardType="numeric"
-            value={bidAmount}
-            onChangeText={setBidAmount}
-          />
-          <TouchableOpacity
-            style={[
-              styles.button,
-              submittingBid && { opacity: 0.6 },
-            ]}
-            onPress={handlePlaceBid}
-            disabled={submittingBid}
-          >
-            {submittingBid ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>تأكيد المزايدة</Text>
+        {/* الوصف */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>الوصف</Text>
+          <Text style={styles.sectionBody}>
+            {listing.description || 'لا يوجد وصف لهذا الإعلان.'}
+          </Text>
+        </View>
+
+        {/* التواصل */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>التواصل</Text>
+
+          {listing.phone ? (
+            <View style={styles.contactRow}>
+              <Text style={styles.contactLabel}>رقم الجوال:</Text>
+              <Text style={styles.contactValue}>{listing.phone}</Text>
+            </View>
+          ) : (
+            <Text style={styles.sectionBody}>لم يتم إضافة رقم جوال.</Text>
+          )}
+
+          {/* أزرار الاتصال وواتساب */}
+          <View style={styles.contactActions}>
+            {listing.phone ? (
+              <TouchableOpacity style={styles.callButton} onPress={openPhone}>
+                <Ionicons name="call" size={18} color="#fff" />
+                <Text style={styles.callButtonText}>اتصال</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {(listing.whatsApp || listing.phone) && (
+              <TouchableOpacity
+                style={styles.whatsappButton}
+                onPress={openWhatsApp}
+              >
+                <Ionicons name="logo-whatsapp" size={18} color="#fff" />
+                <Text style={styles.callButtonText}>واتساب</Text>
+              </TouchableOpacity>
             )}
+          </View>
+        </View>
+
+        {/* زر عرض على الخريطة */}
+        {listing.mapUrl ? (
+          <View style={styles.section}>
+            <TouchableOpacity style={styles.mapButton} onPress={openMap}>
+              <Ionicons name="location-outline" size={18} color="#fff" />
+              <Text style={styles.mapButtonText}>عرض الموقع على الخريطة</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* حالة الإعلان */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>حالة الإعلان</Text>
+          <Text style={styles.sectionBody}>{statusText}</Text>
+        </View>
+
+        {/* مشاركة الإعلان */}
+        <View style={styles.section}>
+          <TouchableOpacity style={styles.shareButton} onPress={shareListing}>
+            <Ionicons name="share-social-outline" size={18} color="#fff" />
+            <Text style={styles.shareButtonText}>مشاركة الإعلان</Text>
           </TouchableOpacity>
         </View>
-      )}
-
-      {isAuction && !loadingBids && bids.length > 1 && (
-        <View style={styles.box}>
-          <Text style={styles.boxTitle}>آخر المزايدات</Text>
-          {bids.slice(0, 5).map((b) => (
-            <Text key={b.id} style={styles.infoLine}>
-              {b.amount} – {maskEmail(b.userEmail)}
-            </Text>
-          ))}
-        </View>
-      )}
-
-      <View style={{ height: 40 }} />
+      </View>
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  container: { flex: 1, backgroundColor: '#f4f4f4' },
+  mainImage: {
+    width: '100%',
+    height: 260,
+    backgroundColor: '#ddd',
   },
-  container: {
+  mainImagePlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mainImagePlaceholderText: {
+    color: '#666',
+  },
+  content: {
     padding: 16,
-    paddingBottom: 40,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff',
+    marginTop: -10,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
   },
   title: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: '800',
     marginBottom: 4,
-    textAlign: 'center',
   },
-  subText: {
-    textAlign: 'center',
+  subTitle: {
     fontSize: 13,
-    color: '#555',
+    color: '#666',
     marginBottom: 12,
   },
-  box: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#eee',
+  section: {
+    marginTop: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: '#eee',
+    paddingTop: 10,
   },
-  boxTitle: {
+  sectionTitle: {
     fontSize: 15,
     fontWeight: '700',
     marginBottom: 6,
   },
+  sectionBody: {
+    fontSize: 14,
+    color: '#333',
+    lineHeight: 22,
+  },
   priceLine: {
     fontSize: 14,
+    color: '#222',
+    marginBottom: 2,
   },
-  description: {
-    fontSize: 14,
-    lineHeight: 20,
+  contactRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
   },
-  infoLine: {
-    fontSize: 13,
-    marginTop: 2,
+  contactLabel: {
+    fontWeight: '600',
+    color: '#555',
   },
-  input: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    marginTop: 8,
-    marginBottom: 8,
+  contactValue: {
+    color: '#222',
   },
-  button: {
-    backgroundColor: '#0077cc',
-    paddingVertical: 10,
-    borderRadius: 8,
+  contactActions: {
+    flexDirection: 'row',
+    marginTop: 10,
+    gap: 8,
+  },
+  callButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    backgroundColor: '#007bff',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
   },
-  buttonText: {
+  whatsappButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#25D366',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  callButtonText: {
     color: '#fff',
-    fontWeight: '700',
+    marginLeft: 6,
+    fontWeight: '600',
   },
+  mapButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#555',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 6,
+  },
+  mapButtonText: {
+    color: '#fff',
+    marginLeft: 6,
+    fontWeight: '600',
+  },
+  shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#444',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 6,
+  },
+  shareButtonText: {
+    color: '#fff',
+    marginLeft: 6,
+    fontWeight: '600',
+  },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });
 
 export default ListingDetailsScreen;
