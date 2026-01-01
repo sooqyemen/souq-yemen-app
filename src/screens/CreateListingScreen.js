@@ -17,13 +17,8 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "../firebase";
 import * as Location from "expo-location"; // للموقع
 
-// لو أعطاك خطأ expo-image-picker مو مثبت:
-// من التيرمنال في الكودسبيس:
-// npx expo install expo-image-picker
 let ImagePicker;
 if (Platform.OS !== "web") {
-  // نحمّله فقط في الجوال
-  // نستخدم require عشان ما يسبب مشاكل في الويب
   ImagePicker = require("expo-image-picker");
 }
 
@@ -57,7 +52,7 @@ export default function CreateListingScreen() {
   const [whatsapp, setWhatsapp] = useState("");
 
   // معلومات الموقع
-  const [locationLabel, setLocationLabel] = useState(""); // اسم القرية / الحي
+  const [locationLabel, setLocationLabel] = useState("");
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
   const [gettingLocation, setGettingLocation] = useState(false);
@@ -69,13 +64,12 @@ export default function CreateListingScreen() {
   const [imageUrls, setImageUrls] = useState([]);
   const [uploading, setUploading] = useState(false);
 
-  // منع تكرار الحفظ + رسالة نجاح
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
 
   const webFileInputRef = useRef(null);
 
-  // === رفع الصور على الويب ===
+  // رفع الصور على الويب
   const handlePickImagesWeb = () => {
     if (webFileInputRef.current) {
       webFileInputRef.current.click();
@@ -115,7 +109,7 @@ export default function CreateListingScreen() {
     }
   };
 
-  // === رفع الصور على الجوال (Expo Go) ===
+  // رفع الصور للجوال
   const handlePickImagesNative = async () => {
     try {
       if (!ImagePicker) {
@@ -200,7 +194,6 @@ export default function CreateListingScreen() {
       setLat(latitude);
       setLng(longitude);
 
-      // نحاول نجيب اسم المدينة / المنطقة
       const places = await Location.reverseGeocodeAsync({
         latitude,
         longitude,
@@ -218,7 +211,6 @@ export default function CreateListingScreen() {
         const label = labelParts.join(" - ");
         setLocationLabel(label);
 
-        // لو المدينة فاضية نحط اسم المدينة اللي رجع من النظام
         if (!city && p.city) {
           setCity(p.city);
         }
@@ -233,9 +225,23 @@ export default function CreateListingScreen() {
     }
   };
 
-  // حفظ الإعلان في Firestore
+  // فتح شاشة اختيار الموقع من الخريطة
+  const handleOpenLocationPicker = () => {
+    navigation.navigate("LocationPicker", {
+      initialLat: lat,
+      initialLng: lng,
+      initialLabel: locationLabel,
+      onLocationPicked: (data) => {
+        setLat(data.lat);
+        setLng(data.lng);
+        setLocationLabel(data.locationLabel || "");
+      },
+    });
+  };
+
+  // حفظ الإعلان
   const handleSave = async () => {
-    if (saving) return; // منع الضغط المتكرر
+    if (saving) return;
 
     const user = auth.currentUser;
     if (!user) {
@@ -281,7 +287,6 @@ export default function CreateListingScreen() {
         isAuction,
         auctionEndsAt,
         status: "active",
-        // معلومات الموقع
         locationLabel: locationLabel.trim(),
         lat,
         lng,
@@ -289,7 +294,6 @@ export default function CreateListingScreen() {
 
       console.log("listing saved with id:", docRef.id);
 
-      // نعيد تعيين الحقول
       setTitle("");
       setDescription("");
       setPrice("");
@@ -304,7 +308,6 @@ export default function CreateListingScreen() {
       setLocationLabel("");
       setLat(null);
       setLng(null);
-
       setSuccessMessage("تم حفظ الإعلان بنجاح ✅");
     } catch (error) {
       console.error("save listing error", error);
@@ -318,33 +321,29 @@ export default function CreateListingScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>إضافة إعلان جديد</Text>
 
-      {/* رسالة نجاح */}
       {successMessage ? (
         <View style={styles.successBox}>
           <Text style={styles.successText}>{successMessage}</Text>
         </View>
       ) : null}
 
-      {/* العنوان */}
       <Text style={styles.label}>عنوان الإعلان</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثال: شقة للإيجار في حي الياقوت..."
+        placeholder="مثال: شقة للإيجار في عدن..."
         value={title}
         onChangeText={setTitle}
       />
 
-      {/* الوصف */}
       <Text style={styles.label}>الوصف</Text>
       <TextInput
         style={[styles.input, styles.textArea]}
-        placeholder="اكتب تفاصيل الإعلان، المميزات، الشروط..."
+        placeholder="اكتب تفاصيل الإعلان..."
         value={description}
         onChangeText={setDescription}
         multiline
       />
 
-      {/* السعر + العملة */}
       <View style={styles.row}>
         <View style={{ flex: 1, marginLeft: 8 }}>
           <Text style={styles.label}>السعر الأساسي</Text>
@@ -382,7 +381,6 @@ export default function CreateListingScreen() {
         </View>
       </View>
 
-      {/* المدينة */}
       <Text style={styles.label}>المدينة</Text>
       <View style={styles.chipContainer}>
         {CITIES.map((c) => (
@@ -403,7 +401,6 @@ export default function CreateListingScreen() {
         ))}
       </View>
 
-      {/* القسم */}
       <Text style={styles.label}>القسم</Text>
       <View style={styles.chipContainer}>
         {CATEGORIES.map((c) => (
@@ -424,33 +421,48 @@ export default function CreateListingScreen() {
         ))}
       </View>
 
-      {/* الموقع على الخريطة */}
+      {/* الموقع */}
       <Text style={styles.label}>الموقع (اختياري)</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثال: قرية كذا - حي كذا"
+        placeholder="مثال: تعز – الحوبان – قرب جولة القصر"
         value={locationLabel}
         onChangeText={setLocationLabel}
       />
-      <TouchableOpacity
-        style={[
-          styles.button,
-          gettingLocation && { opacity: 0.6 },
-        ]}
-        onPress={handleUseMyLocation}
-        disabled={gettingLocation}
-      >
-        <Text style={styles.buttonText}>
-          {gettingLocation ? "جاري تحديد موقعك..." : "استخدام موقعي الحالي"}
-        </Text>
-      </TouchableOpacity>
+
+      <View style={styles.row}>
+        <View style={{ flex: 1, marginLeft: 8 }}>
+          <TouchableOpacity
+            style={[
+              styles.button,
+              gettingLocation && { opacity: 0.6 },
+            ]}
+            onPress={handleUseMyLocation}
+            disabled={gettingLocation}
+          >
+            <Text style={styles.buttonText}>
+              {gettingLocation ? "جاري تحديد موقعك..." : "استخدام موقعي الحالي"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <View style={{ flex: 1 }}>
+          <TouchableOpacity
+            style={styles.buttonSecondary}
+            onPress={handleOpenLocationPicker}
+          >
+            <Text style={styles.buttonSecondaryText}>
+              اختيار موقع من الخريطة
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {lat && lng ? (
         <Text style={styles.locationCoords}>
           الإحداثيات: {lat.toFixed(5)}, {lng.toFixed(5)}
         </Text>
       ) : null}
 
-      {/* التواصل */}
       <Text style={styles.label}>رقم الجوال</Text>
       <TextInput
         style={styles.input}
@@ -468,7 +480,6 @@ export default function CreateListingScreen() {
         onChangeText={setWhatsapp}
       />
 
-      {/* المزايدة */}
       <View style={styles.sectionHeader}>
         <Text style={styles.label}>تفعيل نظام المزاد؟</Text>
         <TouchableOpacity
@@ -504,7 +515,6 @@ export default function CreateListingScreen() {
         </View>
       )}
 
-      {/* رفع الصور */}
       <Text style={styles.label}>الصور (حتى 10 صور)</Text>
 
       {Platform.OS === "web" && (
@@ -528,7 +538,6 @@ export default function CreateListingScreen() {
         </Text>
       </TouchableOpacity>
 
-      {/* عرض مصغرات الصور */}
       {imageUrls.length > 0 && (
         <ScrollView
           horizontal
@@ -545,12 +554,8 @@ export default function CreateListingScreen() {
         </ScrollView>
       )}
 
-      {/* زر الحفظ */}
       <TouchableOpacity
-        style={[
-          styles.saveButton,
-          saving && { opacity: 0.6 },
-        ]}
+        style={[styles.saveButton, saving && { opacity: 0.6 }]}
         onPress={handleSave}
         disabled={saving}
       >
@@ -664,6 +669,20 @@ const styles = StyleSheet.create({
   buttonText: {
     color: "#fff",
     fontWeight: "600",
+  },
+  buttonSecondary: {
+    backgroundColor: "#fff",
+    paddingVertical: 10,
+    borderRadius: 6,
+    marginTop: 6,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#0288d1",
+  },
+  buttonSecondaryText: {
+    color: "#0288d1",
+    fontWeight: "600",
+    fontSize: 13,
   },
   thumbnail: {
     width: 80,
