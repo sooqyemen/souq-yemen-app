@@ -15,6 +15,7 @@ import { useNavigation } from "@react-navigation/native";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "../firebase";
+import * as Location from "expo-location"; // للموقع
 
 // لو أعطاك خطأ expo-image-picker مو مثبت:
 // من التيرمنال في الكودسبيس:
@@ -22,6 +23,7 @@ import { auth, db, storage } from "../firebase";
 let ImagePicker;
 if (Platform.OS !== "web") {
   // نحمّله فقط في الجوال
+  // نستخدم require عشان ما يسبب مشاكل في الويب
   ImagePicker = require("expo-image-picker");
 }
 
@@ -53,13 +55,23 @@ export default function CreateListingScreen() {
   const [category, setCategory] = useState("");
   const [phone, setPhone] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
+
+  // معلومات الموقع
+  const [locationLabel, setLocationLabel] = useState(""); // اسم القرية / الحي
+  const [lat, setLat] = useState(null);
+  const [lng, setLng] = useState(null);
+  const [gettingLocation, setGettingLocation] = useState(false);
+
   const [isAuction, setIsAuction] = useState(false);
   const [auctionDays, setAuctionDays] = useState("1");
   const [auctionHours, setAuctionHours] = useState("0");
 
   const [imageUrls, setImageUrls] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false); // 🔹 جديد: حالة حفظ الإعلان
+
+  // منع تكرار الحفظ + رسالة نجاح
+  const [saving, setSaving] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   const webFileInputRef = useRef(null);
 
@@ -164,16 +176,70 @@ export default function CreateListingScreen() {
     }
   };
 
+  // استخدام موقعي الحالي
+  const handleUseMyLocation = async () => {
+    try {
+      setGettingLocation(true);
+      setSuccessMessage("");
+
+      const { status } =
+        await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "صلاحيات الموقع مطلوبة",
+          "الرجاء السماح للتطبيق بالوصول إلى موقعك لاستخدام هذه الميزة."
+        );
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const { latitude, longitude } = position.coords;
+      setLat(latitude);
+      setLng(longitude);
+
+      // نحاول نجيب اسم المدينة / المنطقة
+      const places = await Location.reverseGeocodeAsync({
+        latitude,
+        longitude,
+      });
+
+      if (places && places[0]) {
+        const p = places[0];
+        const labelParts = [
+          p.name,
+          p.subregion,
+          p.city,
+          p.region,
+          p.country,
+        ].filter(Boolean);
+        const label = labelParts.join(" - ");
+        setLocationLabel(label);
+
+        // لو المدينة فاضية نحط اسم المدينة اللي رجع من النظام
+        if (!city && p.city) {
+          setCity(p.city);
+        }
+      }
+
+      Alert.alert("تم", "تم تحديد موقعك الحالي ✅");
+    } catch (error) {
+      console.error("location error", error);
+      Alert.alert("خطأ", "حدث خطأ أثناء جلب موقعك");
+    } finally {
+      setGettingLocation(false);
+    }
+  };
+
   // حفظ الإعلان في Firestore
   const handleSave = async () => {
+    if (saving) return; // منع الضغط المتكرر
+
     const user = auth.currentUser;
     if (!user) {
       Alert.alert("تسجيل الدخول", "يجب تسجيل الدخول قبل إضافة إعلان.");
-      return;
-    }
-
-    // لو فيه عملية حفظ أو رفع صور شغالة، لا نسمح بالضغط
-    if (isSaving || uploading) {
       return;
     }
 
@@ -197,7 +263,8 @@ export default function CreateListingScreen() {
     }
 
     try {
-      setIsSaving(true); // 🔹 نبدأ حالة الحفظ
+      setSaving(true);
+      setSuccessMessage("");
 
       const docRef = await addDoc(collection(db, "listings"), {
         title: title.trim(),
@@ -214,25 +281,36 @@ export default function CreateListingScreen() {
         isAuction,
         auctionEndsAt,
         status: "active",
+        // معلومات الموقع
+        locationLabel: locationLabel.trim(),
+        lat,
+        lng,
       });
 
       console.log("listing saved with id:", docRef.id);
 
-      Alert.alert("تم", "تم حفظ الإعلان بنجاح ✅", [
-        {
-          text: "حسناً",
-          onPress: () => {
-            // ممكن هنا نفرغ الحقول لو حاب ترجع لنفس الصفحة نظيفة
-            // لكن حالياً نخليك ترجع للشاشة السابقة
-            navigation.goBack();
-          },
-        },
-      ]);
+      // نعيد تعيين الحقول
+      setTitle("");
+      setDescription("");
+      setPrice("");
+      setCity("");
+      setCategory("");
+      setPhone("");
+      setWhatsapp("");
+      setIsAuction(false);
+      setAuctionDays("1");
+      setAuctionHours("0");
+      setImageUrls([]);
+      setLocationLabel("");
+      setLat(null);
+      setLng(null);
+
+      setSuccessMessage("تم حفظ الإعلان بنجاح ✅");
     } catch (error) {
       console.error("save listing error", error);
       Alert.alert("خطأ", "حدث خطأ أثناء حفظ الإعلان");
     } finally {
-      setIsSaving(false); // 🔹 نرجّع الزر لوضعه الطبيعي
+      setSaving(false);
     }
   };
 
@@ -240,11 +318,18 @@ export default function CreateListingScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>إضافة إعلان جديد</Text>
 
+      {/* رسالة نجاح */}
+      {successMessage ? (
+        <View style={styles.successBox}>
+          <Text style={styles.successText}>{successMessage}</Text>
+        </View>
+      ) : null}
+
       {/* العنوان */}
       <Text style={styles.label}>عنوان الإعلان</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثال: شقة للإيجار في عدن..."
+        placeholder="مثال: شقة للإيجار في حي الياقوت..."
         value={title}
         onChangeText={setTitle}
       />
@@ -253,7 +338,7 @@ export default function CreateListingScreen() {
       <Text style={styles.label}>الوصف</Text>
       <TextInput
         style={[styles.input, styles.textArea]}
-        placeholder="اكتب تفاصيل الإعلان..."
+        placeholder="اكتب تفاصيل الإعلان، المميزات، الشروط..."
         value={description}
         onChangeText={setDescription}
         multiline
@@ -262,10 +347,10 @@ export default function CreateListingScreen() {
       {/* السعر + العملة */}
       <View style={styles.row}>
         <View style={{ flex: 1, marginLeft: 8 }}>
-          <Text style={styles.label}>السعر</Text>
+          <Text style={styles.label}>السعر الأساسي</Text>
           <TextInput
             style={styles.input}
-            placeholder="مثال: 300"
+            placeholder="مثال: 150000"
             keyboardType="numeric"
             value={price}
             onChangeText={setPrice}
@@ -339,6 +424,32 @@ export default function CreateListingScreen() {
         ))}
       </View>
 
+      {/* الموقع على الخريطة */}
+      <Text style={styles.label}>الموقع (اختياري)</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="مثال: قرية كذا - حي كذا"
+        value={locationLabel}
+        onChangeText={setLocationLabel}
+      />
+      <TouchableOpacity
+        style={[
+          styles.button,
+          gettingLocation && { opacity: 0.6 },
+        ]}
+        onPress={handleUseMyLocation}
+        disabled={gettingLocation}
+      >
+        <Text style={styles.buttonText}>
+          {gettingLocation ? "جاري تحديد موقعك..." : "استخدام موقعي الحالي"}
+        </Text>
+      </TouchableOpacity>
+      {lat && lng ? (
+        <Text style={styles.locationCoords}>
+          الإحداثيات: {lat.toFixed(5)}, {lng.toFixed(5)}
+        </Text>
+      ) : null}
+
       {/* التواصل */}
       <Text style={styles.label}>رقم الجوال</Text>
       <TextInput
@@ -359,7 +470,7 @@ export default function CreateListingScreen() {
 
       {/* المزايدة */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.label}>تفعيل المزاد؟</Text>
+        <Text style={styles.label}>تفعيل نظام المزاد؟</Text>
         <TouchableOpacity
           style={[styles.switchButton, isAuction && styles.switchOn]}
           onPress={() => setIsAuction(!isAuction)}
@@ -408,9 +519,9 @@ export default function CreateListingScreen() {
       )}
 
       <TouchableOpacity
-        style={[styles.button, (uploading || isSaving) && { opacity: 0.6 }]}
+        style={[styles.button, uploading && { opacity: 0.6 }]}
         onPress={handlePickImages}
-        disabled={uploading || isSaving}
+        disabled={uploading}
       >
         <Text style={styles.buttonText}>
           {uploading ? "جاري رفع الصور..." : "اختيار / رفع صور"}
@@ -438,13 +549,13 @@ export default function CreateListingScreen() {
       <TouchableOpacity
         style={[
           styles.saveButton,
-          (isSaving || uploading) && { opacity: 0.6 },
+          saving && { opacity: 0.6 },
         ]}
         onPress={handleSave}
-        disabled={isSaving || uploading}
+        disabled={saving}
       >
         <Text style={styles.saveButtonText}>
-          {isSaving ? "جاري حفظ الإعلان..." : "حفظ الإعلان"}
+          {saving ? "جاري حفظ الإعلان..." : "حفظ الإعلان"}
         </Text>
       </TouchableOpacity>
 
@@ -463,6 +574,17 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
     marginBottom: 16,
+  },
+  successBox: {
+    backgroundColor: "#e0f2f1",
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 8,
+  },
+  successText: {
+    color: "#00796b",
+    fontWeight: "600",
+    textAlign: "center",
   },
   label: {
     fontSize: 14,
@@ -561,5 +683,10 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 16,
+  },
+  locationCoords: {
+    fontSize: 12,
+    color: "#555",
+    marginTop: 4,
   },
 });
