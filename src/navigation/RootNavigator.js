@@ -1,5 +1,4 @@
 // src/navigation/RootNavigator.js
-
 import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -17,6 +16,7 @@ import ChatScreen from '../screens/ChatScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import AdminDashboardScreen from '../screens/AdminDashboardScreen';
 import CreateListingScreen from '../screens/CreateListingScreen';
+import LocationPickerScreen from '../screens/LocationPickerScreen'; // 👈 شاشة اختيار الموقع
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -86,6 +86,13 @@ export default function RootNavigator() {
             name="ListingDetails"
             component={ListingDetailsScreen}
             options={{ title: 'تفاصيل الإعلان' }}
+          />
+
+          {/* شاشة اختيار الموقع على الخريطة */}
+          <Stack.Screen
+            name="LocationPicker"
+            component={LocationPickerScreen}
+            options={{ title: 'اختيار الموقع على الخريطة' }}
           />
 
           {/* شاشة محادثة واحدة */}
