@@ -1,373 +1,540 @@
 // src/screens/CreateListingScreen.js
-
-import React, { useEffect, useState } from 'react';
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
   TextInput,
-  Switch,
-  TouchableOpacity,
   ScrollView,
-  ActivityIndicator,
   StyleSheet,
+  TouchableOpacity,
+  Image,
+  Platform,
   Alert,
-} from 'react-native';
-import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+} from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { auth, db, storage } from "../firebase";
 
-const CURRENCIES = ['YER', 'SAR', 'USD'];
+// لو أعطاك خطأ expo-image-picker مو مثبت:
+// من التيرمنال في الكودسبيس:
+// npx expo install expo-image-picker
+let ImagePicker;
+if (Platform.OS !== "web") {
+  // نحمّله فقط في الجوال
+  // نستخدم require عشان ما يسبب مشاكل في الويب
+  ImagePicker = require("expo-image-picker");
+}
 
-const CreateListingScreen = ({ navigation }) => {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [city, setCity] = useState('');
-  const [category, setCategory] = useState('');
-  const [price, setPrice] = useState('');
-  const [currency, setCurrency] = useState('YER');
-  const [phone, setPhone] = useState('');
+const CURRENCIES = [
+  { value: "YER", label: "ريال يمني" },
+  { value: "SAR", label: "ريال سعودي" },
+  { value: "USD", label: "دولار" },
+];
+
+const CITIES = ["صنعاء", "عدن", "تعز", "الحديدة", "مأرب", "حضرموت", "أخرى"];
+
+const CATEGORIES = [
+  "العقارات",
+  "السيارات",
+  "الجوالات",
+  "الطاقة الشمسية",
+  "أجهزة كهربائية",
+  "أخرى",
+];
+
+export default function CreateListingScreen() {
+  const navigation = useNavigation();
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("");
+  const [currency, setCurrency] = useState("YER");
+  const [city, setCity] = useState("");
+  const [category, setCategory] = useState("");
+  const [phone, setPhone] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
   const [isAuction, setIsAuction] = useState(false);
-  const [auctionEndText, setAuctionEndText] = useState(''); // نص بسيط لتاريخ الانتهاء (نطوره لاحقًا)
+  const [auctionDays, setAuctionDays] = useState("1");
+  const [auctionHours, setAuctionHours] = useState("0");
 
-  const [rates, setRates] = useState({ usdToYer: 1632, sarToYer: 425 });
-  const [loadingRates, setLoadingRates] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [imageUrls, setImageUrls] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
-  useEffect(() => {
-    const fetchRates = async () => {
-      try {
-        const ref = doc(db, 'settings', 'rates');
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          const data = snap.data();
-          setRates({
-            usdToYer: data.usdToYer || 1632,
-            sarToYer: data.sarToYer || 425,
-          });
-        }
-      } catch (err) {
-        console.log('Error loading rates:', err);
-      } finally {
-        setLoadingRates(false);
-      }
-    };
+  const webFileInputRef = useRef(null);
 
-    fetchRates();
-  }, []);
-
-  const getPricesInAllCurrencies = () => {
-    const basePrice = parseFloat(price || '0');
-    if (!basePrice || !rates.usdToYer || !rates.sarToYer) return null;
-
-    let yer, sar, usd;
-
-    if (currency === 'YER') {
-      yer = basePrice;
-      sar = yer / rates.sarToYer;
-      usd = yer / rates.usdToYer;
-    } else if (currency === 'SAR') {
-      sar = basePrice;
-      yer = sar * rates.sarToYer;
-      usd = yer / rates.usdToYer;
-    } else {
-      // USD
-      usd = basePrice;
-      yer = usd * rates.usdToYer;
-      sar = yer / rates.sarToYer;
+  // === رفع الصور على الويب ===
+  const handlePickImagesWeb = () => {
+    if (webFileInputRef.current) {
+      webFileInputRef.current.click();
     }
-
-    // تقريب بسيط
-    const round = (n) => Math.round(n * 100) / 100;
-
-    return {
-      yer: round(yer),
-      sar: round(sar),
-      usd: round(usd),
-    };
   };
 
-  const handleSubmit = async () => {
-    const user = auth.currentUser;
-
-    if (!user) {
-      Alert.alert('تنبيه', 'يجب تسجيل الدخول قبل إضافة إعلان.');
-      return;
-    }
-
-    if (!title.trim() || !city.trim() || !category.trim() || !price.trim()) {
-      Alert.alert('خطأ', 'الرجاء تعبئة الحقول الأساسية (العنوان، المدينة، القسم، السعر).');
-      return;
-    }
-
-    const numericPrice = parseFloat(price);
-    if (isNaN(numericPrice) || numericPrice <= 0) {
-      Alert.alert('خطأ', 'السعر غير صحيح.');
-      return;
-    }
-
-    const prices = getPricesInAllCurrencies();
-    if (!prices) {
-      Alert.alert('خطأ', 'تعذر حساب أسعار العملات. تأكد من الاتصال بالإنترنت.');
-      return;
-    }
-
-    setSubmitting(true);
+  const handleWebFilesSelected = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
 
     try {
-      const listingData = {
-        title: title.trim(),
-        description: description.trim(),
-        city: city.trim(),
-        category: category.trim(),
-        phone: phone.trim(),
-        basePrice: numericPrice,
-        baseCurrency: currency,
-        priceYER: prices.yer,
-        priceSAR: prices.sar,
-        priceUSD: prices.usd,
-        isAuction,
-        auctionEndText: isAuction ? auctionEndText.trim() : '',
-        ownerId: user.uid,
-        ownerEmail: user.email || '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        status: 'active', // active | hidden | endedAuction | sold
-        viewsCount: 0,
-        bidsCount: 0,
-        highestBid: null,
-        highestBidUserId: null,
-      };
+      setUploading(true);
 
-      await addDoc(collection(db, 'listings'), listingData);
+      const userId = auth.currentUser?.uid || "guest";
+      const uploadedUrls = [];
 
-      Alert.alert('تم', 'تم إضافة الإعلان بنجاح.');
-      // بعد النجاح نرجع للرئيسية أو صفحة إعلاناتي
-      navigation.goBack();
-    } catch (err) {
-      console.error('Error adding listing:', err);
-      Alert.alert('خطأ', 'حدث خطأ أثناء حفظ الإعلان. حاول مرة أخرى.');
+      for (const file of files) {
+        const storageRef = ref(
+          storage,
+          `listing-images/${userId}/${Date.now()}-${file.name}`
+        );
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        uploadedUrls.push(url);
+      }
+
+      setImageUrls((prev) => [...prev, ...uploadedUrls]);
+      Alert.alert("تم", "تم رفع الصور بنجاح ✅");
+    } catch (error) {
+      console.error("upload error", error);
+      Alert.alert("خطأ", "حدث خطأ أثناء رفع الصور");
     } finally {
-      setSubmitting(false);
+      setUploading(false);
+      // نعيد تعيين قيمة input عشان يسمح باختيار نفس الملف مرة ثانية
+      if (event.target) {
+        event.target.value = "";
+      }
     }
   };
 
-  const pricesPreview = price ? getPricesInAllCurrencies() : null;
+  // === رفع الصور على الجوال (Expo Go) ===
+  const handlePickImagesNative = async () => {
+    try {
+      if (!ImagePicker) {
+        Alert.alert("تنبيه", "رفع الصور من الجوال سيتم تفعيله لاحقاً.");
+        return;
+      }
+
+      const { status } =
+        await ImagePicker.ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("صلاحيات مفقودة", "يجب السماح للتطبيق بالوصول للصور.");
+        return;
+      }
+
+      const result =
+        await ImagePicker.ImagePicker.launchImageLibraryAsync({
+          allowsEditing: false,
+          allowsMultipleSelection: true,
+          quality: 0.8,
+        });
+
+      if (result.canceled) return;
+
+      setUploading(true);
+      const userId = auth.currentUser?.uid || "guest";
+      const uploadedUrls = [];
+
+      const selectedAssets = result.assets || [];
+      for (const asset of selectedAssets) {
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+
+        const fileName = asset.fileName || `image-${Date.now()}.jpg`;
+        const storageRef = ref(
+          storage,
+          `listing-images/${userId}/${Date.now()}-${fileName}`
+        );
+        await uploadBytes(storageRef, blob);
+        const url = await getDownloadURL(storageRef);
+        uploadedUrls.push(url);
+      }
+
+      setImageUrls((prev) => [...prev, ...uploadedUrls]);
+      Alert.alert("تم", "تم رفع الصور بنجاح ✅");
+    } catch (error) {
+      console.error("upload error", error);
+      Alert.alert("خطأ", "حدث خطأ أثناء رفع الصور");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handlePickImages = () => {
+    if (Platform.OS === "web") {
+      handlePickImagesWeb();
+    } else {
+      handlePickImagesNative();
+    }
+  };
+
+  // حفظ الإعلان في Firestore
+  const handleSave = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert("تسجيل الدخول", "يجب تسجيل الدخول قبل إضافة إعلان.");
+      return;
+    }
+
+    if (!title || !price || !city || !category) {
+      Alert.alert("تنبيه", "الرجاء تعبئة الحقول الأساسية (العنوان، السعر، المدينة، القسم).");
+      return;
+    }
+
+    const priceNumber = Number(price) || 0;
+
+    let auctionEndsAt = null;
+    if (isAuction) {
+      const now = new Date();
+      const totalHours =
+        (Number(auctionDays) || 0) * 24 + (Number(auctionHours) || 0);
+      const end = new Date(now.getTime() + totalHours * 60 * 60 * 1000);
+      auctionEndsAt = end.toISOString();
+    }
+
+    try {
+      const docRef = await addDoc(collection(db, "listings"), {
+        title: title.trim(),
+        description: description.trim(),
+        price: priceNumber,
+        currency,
+        city,
+        category,
+        phone: phone.trim(),
+        whatsapp: whatsapp.trim(),
+        ownerId: user.uid,
+        createdAt: serverTimestamp(),
+        images: imageUrls,
+        isAuction,
+        auctionEndsAt,
+        status: "active",
+      });
+
+      console.log("listing saved with id:", docRef.id);
+      Alert.alert("تم", "تم حفظ الإعلان بنجاح ✅", [
+        {
+          text: "حسناً",
+          onPress: () => navigation.goBack(),
+        },
+      ]);
+    } catch (error) {
+      console.error("save listing error", error);
+      Alert.alert("خطأ", "حدث خطأ أثناء حفظ الإعلان");
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>إضافة إعلان جديد</Text>
 
-      <Text style={styles.label}>عنوان الإعلان *</Text>
+      {/* العنوان */}
+      <Text style={styles.label}>عنوان الإعلان</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثلاً: شقة للإيجار في حي الياقوت"
+        placeholder="مثال: شقة للإيجار في عدن..."
         value={title}
         onChangeText={setTitle}
       />
 
+      {/* الوصف */}
       <Text style={styles.label}>الوصف</Text>
       <TextInput
         style={[styles.input, styles.textArea]}
-        placeholder="اكتب تفاصيل الإعلان، المميزات، الشروط..."
+        placeholder="اكتب تفاصيل الإعلان..."
         value={description}
         onChangeText={setDescription}
         multiline
       />
 
-      <Text style={styles.label}>المدينة *</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="مثلاً: جدة / صنعاء"
-        value={city}
-        onChangeText={setCity}
-      />
-
-      <Text style={styles.label}>القسم *</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="مثلاً: عقارات / سيارات / جوالات..."
-        value={category}
-        onChangeText={setCategory}
-      />
-
-      <Text style={styles.label}>السعر الأساسي *</Text>
+      {/* السعر + العملة */}
       <View style={styles.row}>
-        <TextInput
-          style={[styles.input, { flex: 1, marginRight: 8 }]}
-          placeholder="مثلاً: 150000"
-          keyboardType="numeric"
-          value={price}
-          onChangeText={setPrice}
-        />
-        <View style={[styles.input, styles.currencyBox]}>
-          {CURRENCIES.map((c) => (
-            <TouchableOpacity
-              key={c}
-              onPress={() => setCurrency(c)}
-              style={[
-                styles.currencyTag,
-                currency === c && styles.currencyTagActive,
-              ]}
-            >
-              <Text
+        <View style={{ flex: 1, marginLeft: 8 }}>
+          <Text style={styles.label}>السعر</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="مثال: 300"
+            keyboardType="numeric"
+            value={price}
+            onChangeText={setPrice}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.label}>العملة</Text>
+          <View style={styles.chipContainer}>
+            {CURRENCIES.map((c) => (
+              <TouchableOpacity
+                key={c.value}
                 style={[
-                  styles.currencyText,
-                  currency === c && styles.currencyTextActive,
+                  styles.chip,
+                  currency === c.value && styles.chipActive,
                 ]}
+                onPress={() => setCurrency(c.value)}
               >
-                {c}
-              </Text>
-            </TouchableOpacity>
-          ))}
+                <Text
+                  style={[
+                    styles.chipText,
+                    currency === c.value && styles.chipTextActive,
+                  ]}
+                >
+                  {c.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       </View>
 
-      {loadingRates ? (
-        <View style={styles.ratesBox}>
-          <ActivityIndicator size="small" />
-          <Text style={styles.ratesText}>جاري تحميل أسعار الصرف...</Text>
-        </View>
-      ) : pricesPreview ? (
-        <View style={styles.ratesBox}>
-          <Text style={styles.ratesTitle}>عرض السعر بجميع العملات:</Text>
-          <Text style={styles.ratesText}>﷼ يمني: {pricesPreview.yer}</Text>
-          <Text style={styles.ratesText}>﷼ سعودي: {pricesPreview.sar}</Text>
-          <Text style={styles.ratesText}>$ دولار: {pricesPreview.usd}</Text>
-        </View>
-      ) : null}
+      {/* المدينة */}
+      <Text style={styles.label}>المدينة</Text>
+      <View style={styles.chipContainer}>
+        {CITIES.map((c) => (
+          <TouchableOpacity
+            key={c}
+            style={[styles.chip, city === c && styles.chipActive]}
+            onPress={() => setCity(c)}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                city === c && styles.chipTextActive,
+              ]}
+            >
+              {c}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-      <Text style={styles.label}>رقم التواصل (اختياري)</Text>
+      {/* القسم */}
+      <Text style={styles.label}>القسم</Text>
+      <View style={styles.chipContainer}>
+        {CATEGORIES.map((c) => (
+          <TouchableOpacity
+            key={c}
+            style={[styles.chip, category === c && styles.chipActive]}
+            onPress={() => setCategory(c)}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                category === c && styles.chipTextActive,
+              ]}
+            >
+              {c}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* التواصل */}
+      <Text style={styles.label}>رقم الجوال</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثلاً: 0500000000"
+        placeholder="مثال: 770000000"
         keyboardType="phone-pad"
         value={phone}
         onChangeText={setPhone}
       />
 
-      <View style={styles.switchRow}>
-        <Text style={styles.label}>تفعيل نظام المزاد؟</Text>
-        <Switch value={isAuction} onValueChange={setIsAuction} />
+      <Text style={styles.label}>رابط واتساب (اختياري)</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="https://wa.me/770000000"
+        value={whatsapp}
+        onChangeText={setWhatsapp}
+      />
+
+      {/* المزايدة */}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.label}>تفعيل المزاد؟</Text>
+        <TouchableOpacity
+          style={[styles.switchButton, isAuction && styles.switchOn]}
+          onPress={() => setIsAuction(!isAuction)}
+        >
+          <Text style={styles.switchText}>
+            {isAuction ? "مفعل" : "غير مفعل"}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {isAuction && (
-        <>
-          <Text style={styles.label}>وقت انتهاء المزاد (نص بسيط الآن)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="مثلاً: 2025-01-31 11:00 مساءً"
-            value={auctionEndText}
-            onChangeText={setAuctionEndText}
-          />
-        </>
+        <View style={styles.row}>
+          <View style={{ flex: 1, marginLeft: 8 }}>
+            <Text style={styles.label}>مدة المزاد (أيام)</Text>
+            <TextInput
+              style={styles.input}
+              keyboardType="numeric"
+              value={auctionDays}
+              onChangeText={setAuctionDays}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.label}>ساعات إضافية</Text>
+            <TextInput
+              style={styles.input}
+              keyboardType="numeric"
+              value={auctionHours}
+              onChangeText={setAuctionHours}
+            />
+          </View>
+        </View>
+      )}
+
+      {/* رفع الصور */}
+      <Text style={styles.label}>الصور (حتى 10 صور)</Text>
+
+      {Platform.OS === "web" && (
+        <input
+          ref={webFileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={handleWebFilesSelected}
+        />
       )}
 
       <TouchableOpacity
-        style={[styles.button, submitting && { opacity: 0.6 }]}
-        onPress={handleSubmit}
-        disabled={submitting}
+        style={[styles.button, uploading && { opacity: 0.6 }]}
+        onPress={handlePickImages}
+        disabled={uploading}
       >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>حفظ الإعلان</Text>
-        )}
+        <Text style={styles.buttonText}>
+          {uploading ? "جاري رفع الصور..." : "اختيار / رفع صور"}
+        </Text>
+      </TouchableOpacity>
+
+      {/* عرض مصغرات الصور */}
+      {imageUrls.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginTop: 10 }}
+        >
+          {imageUrls.map((url, index) => (
+            <Image
+              key={index}
+              source={{ uri: url }}
+              style={styles.thumbnail}
+            />
+          ))}
+        </ScrollView>
+      )}
+
+      {/* زر الحفظ */}
+      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+        <Text style={styles.saveButtonText}>حفظ الإعلان</Text>
       </TouchableOpacity>
 
       <View style={{ height: 40 }} />
     </ScrollView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     padding: 16,
-    paddingBottom: 40,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: "#f5f5f5",
   },
   title: {
     fontSize: 20,
-    fontWeight: '700',
+    fontWeight: "700",
+    textAlign: "center",
     marginBottom: 16,
-    textAlign: 'center',
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 4,
     marginTop: 12,
   },
   input: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  textArea: {
-    height: 90,
-    textAlignVertical: 'top',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  currencyBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-  },
-  currencyTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
+    backgroundColor: "#fff",
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#ccc',
-    marginHorizontal: 2,
+    borderColor: "#ddd",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14,
   },
-  currencyTagActive: {
-    backgroundColor: '#0066cc',
-    borderColor: '#0066cc',
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: "top",
   },
-  currencyText: {
+  row: {
+    flexDirection: "row-reverse",
+    alignItems: "flex-start",
+    marginTop: 8,
+  },
+  chipContainer: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    marginBottom: 6,
+  },
+  chipActive: {
+    backgroundColor: "#1976d2",
+    borderColor: "#1976d2",
+  },
+  chipText: {
     fontSize: 12,
   },
-  currencyTextActive: {
-    color: '#fff',
-    fontWeight: '700',
+  chipTextActive: {
+    color: "#fff",
   },
-  ratesBox: {
-    marginTop: 8,
-    backgroundColor: '#eef6ff',
-    padding: 10,
-    borderRadius: 8,
-  },
-  ratesTitle: {
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  ratesText: {
-    fontSize: 13,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  sectionHeader: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginTop: 16,
   },
+  switchButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#ccc",
+  },
+  switchOn: {
+    backgroundColor: "#43a047",
+    borderColor: "#43a047",
+  },
+  switchText: {
+    color: "#000",
+    fontSize: 12,
+  },
   button: {
-    marginTop: 24,
-    backgroundColor: '#0077cc',
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+    backgroundColor: "#0288d1",
+    paddingVertical: 10,
+    borderRadius: 6,
+    marginTop: 6,
+    alignItems: "center",
   },
   buttonText: {
-    color: '#fff',
-    fontWeight: '700',
+    color: "#fff",
+    fontWeight: "600",
+  },
+  thumbnail: {
+    width: 80,
+    height: 80,
+    borderRadius: 6,
+    marginRight: 8,
+    backgroundColor: "#eee",
+  },
+  saveButton: {
+    backgroundColor: "#1976d2",
+    paddingVertical: 12,
+    borderRadius: 6,
+    marginTop: 24,
+    alignItems: "center",
+  },
+  saveButtonText: {
+    color: "#fff",
+    fontWeight: "700",
     fontSize: 16,
   },
 });
-
-export default CreateListingScreen;
