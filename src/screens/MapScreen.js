@@ -1,51 +1,57 @@
 // src/screens/MapScreen.js
-// شاشة "الخريطة" الحالية تعرض الإعلانات حسب المدينة
-// بدون خرائط حقيقية الآن، لتعمل بدون أي مكتبات إضافية.
-// لاحقاً نقدر نضيف خريطة فعلية (OSM) ونربطها بنفس البيانات.
-
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState, useMemo } from "react";
 import {
   View,
   Text,
-  TextInput,
-  ActivityIndicator,
-  FlatList,
-  TouchableOpacity,
   StyleSheet,
-} from 'react-native';
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-} from 'firebase/firestore';
-import { db } from '../firebase';
+  ActivityIndicator,
+  Platform,
+  ScrollView,
+  TouchableOpacity,
+} from "react-native";
+import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore";
+import { db } from "../firebase";
 
-const MapScreen = ({ navigation }) => {
+// إحداثيات تقريبية لمدن اليمن + جدة (لقطاعات أبحر مثلاً)
+const CITY_COORDS = {
+  صنعاء: { lat: 15.3694, lon: 44.1910 },
+  عدن: { lat: 12.7855, lon: 45.0187 },
+  تعز: { lat: 13.5795, lon: 44.0209 },
+  الحديدة: { lat: 14.7978, lon: 42.9530 },
+  مأرب: { lat: 15.4629, lon: 45.3253 },
+  حضرموت: { lat: 14.5408, lon: 49.1250 },
+  "جدة / أبحر": { lat: 21.7480, lon: 39.0900 },
+  أخرى: { lat: 15.5, lon: 44.0 },
+};
+
+const ALL_LABEL = "الكل";
+
+export default function MapScreen() {
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedCity, setSelectedCity] = useState(ALL_LABEL);
 
-  const [cityFilter, setCityFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-
+  // 🟦 تحميل الإعلانات من Firestore
   useEffect(() => {
     const q = query(
-      collection(db, 'listings'),
-      orderBy('createdAt', 'desc')
+      collection(db, "listings"),
+      // لو حابب تخفي الإعلانات غير النشطة
+      // where("status", "==", "active"),
+      orderBy("createdAt", "desc")
     );
 
     const unsub = onSnapshot(
       q,
-      snap => {
-        const data = snap.docs.map(d => ({
-          id: d.id,
-          ...d.data(),
+      (snapshot) => {
+        const items = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
         }));
-        setListings(data);
+        setListings(items);
         setLoading(false);
       },
-      err => {
-        console.log('Error loading listings in MapScreen:', err);
+      (error) => {
+        console.error("map listings error", error);
         setLoading(false);
       }
     );
@@ -53,226 +59,316 @@ const MapScreen = ({ navigation }) => {
     return () => unsub();
   }, []);
 
-  const filteredBySearch = useMemo(() => {
-    return listings.filter((item) => {
-      const city = (item.city || '').toLowerCase();
-      const cat = (item.category || '').toLowerCase();
-      const cf = cityFilter.trim().toLowerCase();
-      const kf = categoryFilter.trim().toLowerCase();
-
-      const matchCity = cf ? city.includes(cf) : true;
-      const matchCat = kf ? cat.includes(kf) : true;
-      return matchCity && matchCat;
-    });
-  }, [listings, cityFilter, categoryFilter]);
-
-  // تجميع الإعلانات حسب المدينة
-  const groupedByCity = useMemo(() => {
-    const map = new Map();
-    for (const item of filteredBySearch) {
-      const city = item.city || 'مدينة غير معروفة';
-      if (!map.has(city)) {
-        map.set(city, []);
-      }
-      map.get(city).push(item);
+  // عدد الإعلانات في كل مدينة
+  const cityCounts = useMemo(() => {
+    const counts = {};
+    for (const ad of listings) {
+      const city = ad.city || "غير محدد";
+      counts[city] = (counts[city] || 0) + 1;
     }
+    return counts;
+  }, [listings]);
 
-    return Array.from(map.entries()).map(([city, items]) => ({
-      city,
-      count: items.length,
-      items,
-    }));
-  }, [filteredBySearch]);
+  const cities = useMemo(() => {
+    const keys = Object.keys(cityCounts);
+    // نحافظ على ترتيب ثابت تقريباً
+    const ordered = [
+      "صنعاء",
+      "عدن",
+      "تعز",
+      "الحديدة",
+      "مأرب",
+      "حضرموت",
+      "جدة / أبحر",
+      "أخرى",
+    ].filter((c) => keys.includes(c));
+    const rest = keys.filter((c) => !ordered.includes(c));
+    return [ALL_LABEL, ...ordered, ...rest];
+  }, [cityCounts]);
+
+  const filteredListings =
+    selectedCity === ALL_LABEL
+      ? listings
+      : listings.filter((ad) => ad.city === selectedCity);
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
-        <Text style={{ marginTop: 8 }}>جاري تحميل الإعلانات...</Text>
+        <ActivityIndicator size="large" color="#1976d2" />
+        <Text style={{ marginTop: 8 }}>جاري تحميل الإعلانات على الخريطة...</Text>
       </View>
     );
   }
 
-  if (!listings.length) {
-    return (
-      <View style={styles.center}>
-        <Text>لا توجد إعلانات حالياً.</Text>
-      </View>
-    );
-  }
+  // ---------------------------------------------------------------------------
+  // 🖥 فرع الويب: خريطة OpenStreetMap داخل iframe + قائمة الإعلانات
+  // ---------------------------------------------------------------------------
+  if (Platform.OS === "web") {
+    const coords =
+      selectedCity !== ALL_LABEL ? CITY_COORDS[selectedCity] : null;
 
-  const renderCityGroup = ({ item }) => {
+    let mapUrl = null;
+    if (coords) {
+      const { lat, lon } = coords;
+      const delta = 0.4;
+      const left = lon - delta;
+      const right = lon + delta;
+      const top = lat + delta;
+      const bottom = lat - delta;
+
+      mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${left},${bottom},${right},${top}&layer=mapnik&marker=${lat},${lon}`;
+    }
+
     return (
-      <View style={styles.cityCard}>
-        <View style={styles.cityHeader}>
-          <Text style={styles.cityName}>{item.city}</Text>
-          <Text style={styles.cityCount}>عدد الإعلانات: {item.count}</Text>
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.title}>خريطة الإعلانات حسب المدن</Text>
+        <Text style={styles.subtitle}>
+          اختر مدينة لمشاهدة موقعها التقريبي على الخريطة وقائمة الإعلانات فيها.
+        </Text>
+
+        {/* أزرار اختيار المدينة */}
+        <View style={styles.chipContainer}>
+          {cities.map((city) => (
+            <TouchableOpacity
+              key={city}
+              style={[
+                styles.chip,
+                selectedCity === city && styles.chipActive,
+              ]}
+              onPress={() => setSelectedCity(city)}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  selectedCity === city && styles.chipTextActive,
+                ]}
+              >
+                {city === ALL_LABEL ? "كل المدن" : city}{" "}
+                {city !== ALL_LABEL && cityCounts[city]
+                  ? `(${cityCounts[city]})`
+                  : ""}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
-        {item.items.slice(0, 3).map((ad) => (
-          <TouchableOpacity
-            key={ad.id}
-            style={styles.adRow}
-            onPress={() =>
-              navigation.navigate('ListingDetails', {
-                listingId: ad.id,
-                listing: ad,
-              })
-            }
-          >
-            <Text style={styles.adTitle} numberOfLines={1}>
-              {ad.title || 'إعلان بدون عنوان'}
+        {/* خريطة الويب */}
+        {mapUrl && (
+          <View style={styles.mapWrapper}>
+            {/* مسموح نستخدم iframe على الويب فقط */}
+            <iframe
+              title="ads-map"
+              src={mapUrl}
+              style={{
+                border: 0,
+                width: "100%",
+                height: 380,
+                borderRadius: 8,
+              }}
+              loading="lazy"
+            />
+            <Text style={styles.mapNote}>
+              ملاحظة: الخريطة تقريبية، يتم وضع العلامة في مركز المدينة فقط. لاحقاً
+              يمكن إضافة تحديد موقع دقيق لكل إعلان.
             </Text>
-            <Text style={styles.adPrice}>
-              ﷼ يمني: {ad.priceYER ? Math.round(ad.priceYER) : '-'}
-            </Text>
-            {ad.isAuction && (
-              <Text style={styles.badgeAuction}>مزاد</Text>
-            )}
-          </TouchableOpacity>
-        ))}
-
-        {item.items.length > 3 && (
-          <Text style={styles.moreText}>
-            + {item.items.length - 3} إعلان/إعلانات أخرى في هذه المدينة
-          </Text>
+          </View>
         )}
+
+        {/* قائمة الإعلانات */}
+        <View style={{ marginTop: 16 }}>
+          <Text style={styles.listHeader}>
+            {selectedCity === ALL_LABEL
+              ? `جميع الإعلانات (${filteredListings.length})`
+              : `إعلانات مدينة ${selectedCity} (${filteredListings.length})`}
+          </Text>
+
+          {filteredListings.length === 0 ? (
+            <Text style={{ marginTop: 8 }}>لا توجد إعلانات في هذه المدينة حالياً.</Text>
+          ) : (
+            filteredListings.map((ad) => (
+              <View key={ad.id} style={styles.card}>
+                <Text style={styles.cardTitle}>{ad.title || "إعلان بدون عنوان"}</Text>
+                <Text style={styles.cardCity}>
+                  {ad.city || "مدينة غير محددة"} • {ad.category || "قسم غير محدد"}
+                </Text>
+                {typeof ad.price === "number" && ad.price > 0 && (
+                  <Text style={styles.cardPrice}>
+                    {ad.price} {ad.currency || ""}
+                  </Text>
+                )}
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 📱 فرع الجوال (Android / iOS): نستخدم react-native-maps
+  // ملاحظة: لما تنتقل للنسخة الحقيقية على الجوال، ثبّت الحزمة:
+  //   npx expo install react-native-maps
+  // ---------------------------------------------------------------------------
+  let MapView, Marker, Callout;
+  try {
+    const RNMaps = require("react-native-maps");
+    MapView = RNMaps.default;
+    Marker = RNMaps.Marker;
+    Callout = RNMaps.Callout;
+  } catch (e) {
+    MapView = null;
+  }
+
+  // لو ما ركّبنا react-native-maps لسه
+  if (!MapView) {
+    return (
+      <View style={styles.center}>
+        <Text style={{ textAlign: "center", paddingHorizontal: 16 }}>
+          لعرض الخريطة داخل تطبيق الجوال، تحتاج إلى تثبيت مكتبة{" "}
+          <Text style={{ fontWeight: "bold" }}>react-native-maps</Text>{" "}
+          في مشروع Expo، ثم تشغيل التطبيق على Android / iOS.
+        </Text>
       </View>
     );
+  }
+
+  // نحدد مركز افتراضي للخريطة حسب أول إعلان عنده مدينة معروفة
+  const firstWithCoords = filteredListings.find(
+    (ad) => ad.city && CITY_COORDS[ad.city]
+  );
+  const defaultCoords =
+    (firstWithCoords && CITY_COORDS[firstWithCoords.city]) ||
+    CITY_COORDS["صنعاء"];
+
+  const region = {
+    latitude: defaultCoords.lat,
+    longitude: defaultCoords.lon,
+    latitudeDelta: 5,
+    longitudeDelta: 5,
   };
 
   return (
     <View style={{ flex: 1 }}>
-      {/* شريط الفلترة أعلى الشاشة */}
-      <View style={styles.filtersRow}>
-        <View style={{ flex: 1, marginRight: 6 }}>
-          <Text style={styles.filterLabel}>بحث بالمدينة</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="مثلاً: جدة / صنعاء"
-            value={cityFilter}
-            onChangeText={setCityFilter}
-          />
-        </View>
-        <View style={{ flex: 1, marginLeft: 6 }}>
-          <Text style={styles.filterLabel}>بحث بالقسم</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="عقارات / سيارات / جوالات..."
-            value={categoryFilter}
-            onChangeText={setCategoryFilter}
-          />
-        </View>
-      </View>
+      <MapView style={{ flex: 1 }} initialRegion={region}>
+        {filteredListings.map((ad) => {
+          const coords = ad.city && CITY_COORDS[ad.city];
+          if (!coords) return null;
 
-      {/* تنبيه بسيط أن هذه نسخة بدون خريطة فعلية */}
-      <View style={styles.infoBox}>
-        <Text style={styles.infoText}>
-          هذه نسخة مبدئية لعرض الإعلانات حسب المدن.
-          لاحقاً يمكن إضافة خريطة فعلية (OpenStreetMap) لعرض المواقع كنقاط (Pins).
-        </Text>
-      </View>
-
-      <FlatList
-        data={groupedByCity}
-        keyExtractor={(item) => item.city}
-        renderItem={renderCityGroup}
-        contentContainerStyle={{ padding: 12, paddingBottom: 24 }}
-      />
+          return (
+            <Marker
+              key={ad.id}
+              coordinate={{
+                latitude: coords.lat,
+                longitude: coords.lon,
+              }}
+              title={ad.title || "إعلان"}
+              description={ad.city}
+            >
+              <Callout>
+                <View style={{ maxWidth: 200 }}>
+                  <Text style={{ fontWeight: "700", marginBottom: 4 }}>
+                    {ad.title || "إعلان"}
+                  </Text>
+                  <Text>{ad.city || "مدينة غير محددة"}</Text>
+                  {typeof ad.price === "number" && ad.price > 0 && (
+                    <Text style={{ marginTop: 4 }}>
+                      السعر: {ad.price} {ad.currency || ""}
+                    </Text>
+                  )}
+                </View>
+              </Callout>
+            </Marker>
+          );
+        })}
+      </MapView>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
+  container: {
+    padding: 16,
+    backgroundColor: "#f5f5f5",
+  },
   center: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    backgroundColor: "#f5f5f5",
   },
-  filtersRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 4,
-    backgroundColor: '#f5f5f5',
+  title: {
+    fontSize: 20,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 8,
   },
-  filterLabel: {
-    fontSize: 12,
-    marginBottom: 2,
-    color: '#555',
+  subtitle: {
+    fontSize: 13,
+    textAlign: "center",
+    color: "#555",
+    marginBottom: 12,
   },
-  input: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
+  chipContainer: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#ddd',
-    fontSize: 13,
-  },
-  infoBox: {
-    marginHorizontal: 12,
-    marginTop: 4,
-    marginBottom: 2,
-    backgroundColor: '#eef6ff',
-    borderRadius: 8,
-    padding: 8,
-  },
-  infoText: {
-    fontSize: 12,
-    color: '#444',
-  },
-  cityCard: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#eee',
-  },
-  cityHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    borderColor: "#ccc",
     marginBottom: 6,
   },
-  cityName: {
+  chipActive: {
+    backgroundColor: "#1976d2",
+    borderColor: "#1976d2",
+  },
+  chipText: {
+    fontSize: 12,
+  },
+  chipTextActive: {
+    color: "#fff",
+  },
+  mapWrapper: {
+    marginTop: 4,
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: "#ddd",
+  },
+  mapNote: {
+    fontSize: 11,
+    color: "#555",
+    marginTop: 4,
+  },
+  listHeader: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
   },
-  cityCount: {
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#eee",
+  },
+  cardTitle: {
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  cardCity: {
     fontSize: 12,
-    color: '#555',
+    color: "#666",
   },
-  adRow: {
-    paddingVertical: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    marginTop: 4,
-  },
-  adTitle: {
+  cardPrice: {
     fontSize: 13,
-    fontWeight: '600',
-  },
-  adPrice: {
-    fontSize: 12,
-    color: '#333',
-  },
-  badgeAuction: {
-    alignSelf: 'flex-start',
-    marginTop: 2,
-    backgroundColor: '#e67e22',
-    color: '#fff',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    fontSize: 11,
-  },
-  moreText: {
+    color: "#1976d2",
     marginTop: 4,
-    fontSize: 11,
-    color: '#777',
   },
 });
-
-export default MapScreen;
