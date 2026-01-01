@@ -22,7 +22,6 @@ import { auth, db, storage } from "../firebase";
 let ImagePicker;
 if (Platform.OS !== "web") {
   // نحمّله فقط في الجوال
-  // نستخدم require عشان ما يسبب مشاكل في الويب
   ImagePicker = require("expo-image-picker");
 }
 
@@ -60,6 +59,7 @@ export default function CreateListingScreen() {
 
   const [imageUrls, setImageUrls] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false); // 🔹 جديد: حالة حفظ الإعلان
 
   const webFileInputRef = useRef(null);
 
@@ -97,7 +97,6 @@ export default function CreateListingScreen() {
       Alert.alert("خطأ", "حدث خطأ أثناء رفع الصور");
     } finally {
       setUploading(false);
-      // نعيد تعيين قيمة input عشان يسمح باختيار نفس الملف مرة ثانية
       if (event.target) {
         event.target.value = "";
       }
@@ -173,8 +172,16 @@ export default function CreateListingScreen() {
       return;
     }
 
+    // لو فيه عملية حفظ أو رفع صور شغالة، لا نسمح بالضغط
+    if (isSaving || uploading) {
+      return;
+    }
+
     if (!title || !price || !city || !category) {
-      Alert.alert("تنبيه", "الرجاء تعبئة الحقول الأساسية (العنوان، السعر، المدينة، القسم).");
+      Alert.alert(
+        "تنبيه",
+        "الرجاء تعبئة الحقول الأساسية (العنوان، السعر، المدينة، القسم)."
+      );
       return;
     }
 
@@ -190,6 +197,8 @@ export default function CreateListingScreen() {
     }
 
     try {
+      setIsSaving(true); // 🔹 نبدأ حالة الحفظ
+
       const docRef = await addDoc(collection(db, "listings"), {
         title: title.trim(),
         description: description.trim(),
@@ -208,15 +217,22 @@ export default function CreateListingScreen() {
       });
 
       console.log("listing saved with id:", docRef.id);
+
       Alert.alert("تم", "تم حفظ الإعلان بنجاح ✅", [
         {
           text: "حسناً",
-          onPress: () => navigation.goBack(),
+          onPress: () => {
+            // ممكن هنا نفرغ الحقول لو حاب ترجع لنفس الصفحة نظيفة
+            // لكن حالياً نخليك ترجع للشاشة السابقة
+            navigation.goBack();
+          },
         },
       ]);
     } catch (error) {
       console.error("save listing error", error);
       Alert.alert("خطأ", "حدث خطأ أثناء حفظ الإعلان");
+    } finally {
+      setIsSaving(false); // 🔹 نرجّع الزر لوضعه الطبيعي
     }
   };
 
@@ -392,9 +408,9 @@ export default function CreateListingScreen() {
       )}
 
       <TouchableOpacity
-        style={[styles.button, uploading && { opacity: 0.6 }]}
+        style={[styles.button, (uploading || isSaving) && { opacity: 0.6 }]}
         onPress={handlePickImages}
-        disabled={uploading}
+        disabled={uploading || isSaving}
       >
         <Text style={styles.buttonText}>
           {uploading ? "جاري رفع الصور..." : "اختيار / رفع صور"}
@@ -419,8 +435,17 @@ export default function CreateListingScreen() {
       )}
 
       {/* زر الحفظ */}
-      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-        <Text style={styles.saveButtonText}>حفظ الإعلان</Text>
+      <TouchableOpacity
+        style={[
+          styles.saveButton,
+          (isSaving || uploading) && { opacity: 0.6 },
+        ]}
+        onPress={handleSave}
+        disabled={isSaving || uploading}
+      >
+        <Text style={styles.saveButtonText}>
+          {isSaving ? "جاري حفظ الإعلان..." : "حفظ الإعلان"}
+        </Text>
       </TouchableOpacity>
 
       <View style={{ height: 40 }} />
