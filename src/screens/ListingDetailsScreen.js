@@ -9,226 +9,292 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
-  Platform,
 } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
+import { useAuth } from "../context/AuthContext";
+import { doc, deleteDoc } from "firebase/firestore";
+import { db } from "../firebase";
 
-function openExternalLink(url) {
-  if (!url) return;
-  Linking.canOpenURL(url)
-    .then((supported) => {
-      if (!supported) {
-        Alert.alert("تنبيه", "لا يمكن فتح هذا الرابط على جهازك.");
-      } else {
-        Linking.openURL(url);
-      }
-    })
-    .catch(() => {
-      Alert.alert("خطأ", "حدث خطأ أثناء محاولة فتح الرابط.");
-    });
+const ADMIN_EMAIL = "mansouralbarout@gmail.com";
+
+function formatPrice(price, currency) {
+  if (price == null) return "بدون سعر";
+  const intPrice = Number(price) || 0;
+
+  if (currency === "SAR") return `${intPrice} ريال سعودي`;
+  if (currency === "USD") return `$${intPrice} دولار`;
+  return `${intPrice} ريال يمني`;
 }
 
 export default function ListingDetailsScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { listing } = route.params || {};
+  const { user } = useAuth();
 
-  if (!listing) {
-    return (
-      <View style={styles.center}>
-        <Text>لا توجد بيانات للإعلان.</Text>
-        <TouchableOpacity
-          style={[styles.mainButton, { marginTop: 16 }]}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.mainButtonText}>العودة</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  // نحاول نقرأ البيانات بأكثر من شكل احتياطاً
+  const listing =
+    route.params?.listing ||
+    route.params?.item ||
+    route.params ||
+    {};
 
   const {
+    id,
     title,
     description,
     price,
     currency,
     city,
     category,
+    images = [],
     phone,
     whatsapp,
-    images,
     locationLabel,
+    createdAt,
+    isAuction,
+    auctionEndsAt,
+    ownerId,
     lat,
     lng,
-    isAuction,
   } = listing;
 
-  // رقم السعر المنسّق
-  const priceText =
-    typeof price === "number" ? `${price.toLocaleString()} ${currency || ""}` : "";
+  const isOwner = user && ownerId && user.uid === ownerId;
+  const isAdmin = user && user.email === ADMIN_EMAIL;
 
-  // رابط الاتصال
   const handleCall = () => {
     if (!phone) {
-      Alert.alert("تنبيه", "رقم الجوال غير متوفر.");
+      Alert.alert("تنبيه", "لا يوجد رقم جوال في هذا الإعلان.");
       return;
     }
-    const telUrl = `tel:${phone}`;
-    openExternalLink(telUrl);
+    const tel = `tel:${phone}`;
+    Linking.openURL(tel).catch(() =>
+      Alert.alert("خطأ", "تعذر فتح تطبيق الاتصال.")
+    );
   };
 
-  // رابط واتساب
   const handleWhatsApp = () => {
-    if (!whatsapp && !phone) {
-      Alert.alert("تنبيه", "لا يوجد رقم واتساب أو جوال للتواصل.");
-      return;
-    }
-
-    let url = whatsapp;
-
-    if (!url) {
-      // نبني رابط من رقم الجوال
-      const digits = (phone || "").replace(/[^\d]/g, "");
-      if (!digits) {
-        Alert.alert("تنبيه", "رقم الجوال غير صالح لإنشاء رابط واتساب.");
-        return;
-      }
-      url = `https://wa.me/${digits}`;
-    }
-
-    openExternalLink(url);
-  };
-
-  // فتح الموقع في خرائط جوجل
-  const handleOpenInMaps = () => {
-    if (typeof lat !== "number" || typeof lng !== "number") {
-      Alert.alert(
-        "تنبيه",
-        "لم يتم حفظ موقع هذا الإعلان على الخريطة. الرجاء استخدام زر (استخدام موقعي الحالي) عند إضافة الإعلان."
+    if (whatsapp) {
+      Linking.openURL(whatsapp).catch(() =>
+        Alert.alert("خطأ", "تعذر فتح واتساب بالرابط المحدد.")
       );
       return;
     }
 
-    const label = encodeURIComponent(locationLabel || title || "موقع الإعلان");
-    let url = "";
+    if (!phone) {
+      Alert.alert(
+        "تنبيه",
+        "لا يوجد رقم جوال أو رابط واتساب لهذا الإعلان."
+      );
+      return;
+    }
 
-    // نفس الرابط يعمل على الجوال والويب
-    url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${label}`;
-
-    openExternalLink(url);
+    const wa = `https://wa.me/${phone.replace(/[^0-9]/g, "")}`;
+    Linking.openURL(wa).catch(() =>
+      Alert.alert("خطأ", "تعذر فتح واتساب.")
+    );
   };
+
+  const handleOpenMap = () => {
+    if (lat && lng) {
+      const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+      Linking.openURL(url).catch(() =>
+        Alert.alert("خطأ", "تعذر فتح الخريطة.")
+      );
+      return;
+    }
+
+    if (city || locationLabel) {
+      const query = encodeURIComponent(
+        `${locationLabel || ""} ${city || ""}`.trim()
+      );
+      const url = `https://www.google.com/maps/search/?api=1&query=${query}`;
+      Linking.openURL(url).catch(() =>
+        Alert.alert("خطأ", "تعذر فتح الخريطة.")
+      );
+      return;
+    }
+
+    Alert.alert(
+      "تنبيه",
+      "لا توجد معلومات كافية عن موقع هذا الإعلان."
+    );
+  };
+
+  const handleDelete = async () => {
+    if (!id) {
+      Alert.alert("خطأ", "لا يمكن تحديد هذا الإعلان للحذف.");
+      return;
+    }
+
+    if (!isOwner && !isAdmin) {
+      Alert.alert(
+        "صلاحيات",
+        "فقط صاحب الإعلان أو المدير يمكنه حذف الإعلان."
+      );
+      return;
+    }
+
+    Alert.alert(
+      "تأكيد الحذف",
+      "هل أنت متأكد من حذف هذا الإعلان؟ لا يمكن التراجع.",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "حذف",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, "listings", id));
+              Alert.alert("تم", "تم حذف الإعلان بنجاح.");
+              navigation.goBack();
+            } catch (error) {
+              console.error("delete listing error", error);
+              Alert.alert("خطأ", "حدث خطأ أثناء حذف الإعلان.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const createdDateText = (() => {
+    if (!createdAt) return "";
+    try {
+      const date =
+        typeof createdAt.toDate === "function"
+          ? createdAt.toDate()
+          : new Date(createdAt);
+      return date.toLocaleString("ar-EG");
+    } catch {
+      return "";
+    }
+  })();
+
+  const auctionText = (() => {
+    if (!isAuction) return "هذا الإعلان بدون مزاد.";
+    if (!auctionEndsAt) return "المزاد مفعّل (وقت الانتهاء غير محدد).";
+    try {
+      const end = new Date(auctionEndsAt);
+      return `المزاد ينتهي في: ${end.toLocaleString("ar-EG")}`;
+    } catch {
+      return "المزاد مفعّل.";
+    }
+  })();
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      {/* صور الإعلان */}
-      {Array.isArray(images) && images.length > 0 ? (
+      {/* الصور */}
+      {images.length > 0 && (
         <ScrollView
           horizontal
-          pagingEnabled
           showsHorizontalScrollIndicator={false}
-          style={styles.imagesScroller}
+          style={styles.imagesRow}
         >
           {images.map((url, index) => (
             <Image
               key={index}
               source={{ uri: url }}
               style={styles.image}
-              resizeMode="cover"
             />
           ))}
         </ScrollView>
-      ) : (
-        <View style={styles.imagePlaceholder}>
-          <Text style={{ color: "#777" }}>لا توجد صور لهذا الإعلان</Text>
-        </View>
       )}
 
-      {/* العنوان والسعر */}
-      <View style={styles.section}>
-        <Text style={styles.title}>{title || "إعلان بدون عنوان"}</Text>
-        {priceText ? <Text style={styles.price}>{priceText}</Text> : null}
+      {/* العنوان + السعر */}
+      <Text style={styles.title}>{title || "إعلان بدون عنوان"}</Text>
 
-        <Text style={styles.meta}>
-          {city ? `المدينة: ${city}` : "المدينة: غير محددة"} •{" "}
-          {category ? `القسم: ${category}` : "القسم: غير محدد"}
-        </Text>
+      <Text style={styles.price}>
+        {formatPrice(price, currency)}{" "}
+        {currency === "YER"
+          ? "(ريال يمني)"
+          : currency === "SAR"
+          ? "(ريال سعودي)"
+          : "(دولار)"}
+      </Text>
 
-        {/* حالة المزاد لو مفعّل */}
-        {isAuction ? (
-          <View style={styles.badgeAuction}>
-            <Text style={styles.badgeAuctionText}>إعلان بنظام المزاد</Text>
-          </View>
+      {/* معلومات أساسية */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>المعلومات الأساسية</Text>
+        {city ? (
+          <Text style={styles.rowText}>المدينة: {city}</Text>
         ) : null}
-      </View>
-
-      {/* الموقع */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>الموقع</Text>
-
+        {category ? (
+          <Text style={styles.rowText}>القسم: {category}</Text>
+        ) : null}
         {locationLabel ? (
-          <Text style={styles.locationText}>📍 {locationLabel}</Text>
-        ) : (
-          <Text style={styles.locationText}>
-            لم يقم المعلن بتحديد وصف للموقع.
+          <Text style={styles.rowText}>
+            الموقع التفصيلي: {locationLabel}
           </Text>
-        )}
-
-        {typeof lat === "number" && typeof lng === "number" ? (
-          <TouchableOpacity
-            style={[styles.mainButton, { marginTop: 10 }]}
-            onPress={handleOpenInMaps}
-          >
-            <Text style={styles.mainButtonText}>
-              فتح الموقع في خرائط جوجل
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <Text style={styles.locationNote}>
-            لا توجد إحداثيات محفوظة لهذا الإعلان. عند إضافة إعلان جديد يمكنك
-            استخدام زر "استخدام موقعي الحالي" لحفظ الموقع بدقة.
+        ) : null}
+        {createdDateText ? (
+          <Text style={styles.rowText}>
+            تاريخ الإضافة: {createdDateText}
           </Text>
-        )}
+        ) : null}
+        <Text style={styles.rowText}>{auctionText}</Text>
       </View>
 
-      {/* وصف الإعلان */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>تفاصيل الإعلان</Text>
-        <Text style={styles.description}>
-          {description && description.trim().length > 0
-            ? description
-            : "لم يقم المعلن بكتابة وصف تفصيلي."}
-        </Text>
-      </View>
+      {/* الوصف */}
+      {description ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>الوصف</Text>
+          <Text style={styles.description}>{description}</Text>
+        </View>
+      ) : null}
 
-      {/* طرق التواصل */}
-      <View style={styles.section}>
+      {/* الاتصال */}
+      <View style={styles.card}>
         <Text style={styles.sectionTitle}>طرق التواصل</Text>
 
         {phone ? (
-          <TouchableOpacity
-            style={[styles.contactButton, { backgroundColor: "#388e3c" }]}
-            onPress={handleCall}
-          >
-            <Text style={styles.contactButtonText}>📞 اتصال على {phone}</Text>
-          </TouchableOpacity>
+          <Text style={styles.rowText}>رقم الجوال: {phone}</Text>
         ) : (
-          <Text style={styles.locationNote}>
-            رقم الجوال غير متوفر في هذا الإعلان.
+          <Text style={styles.rowText}>رقم الجوال غير مذكور</Text>
+        )}
+
+        {whatsapp ? (
+          <Text style={styles.rowText}>
+            رابط واتساب مخصص مضاف للإعلان
+          </Text>
+        ) : (
+          <Text style={styles.rowText}>
+            سيتم استخدام رقم الجوال للاتصال عبر واتساب
           </Text>
         )}
 
-        <TouchableOpacity
-          style={[styles.contactButton, { backgroundColor: "#25D366" }]}
-          onPress={handleWhatsApp}
-        >
-          <Text style={styles.contactButtonText}>💬 تواصل عبر واتساب</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonsRow}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.callButton]}
+            onPress={handleCall}
+          >
+            <Text style={styles.actionButtonText}>اتصال</Text>
+          </TouchableOpacity>
 
-        <Text style={styles.smallHint}>
-          لن نعرض بريد المعلن هنا حفاظاً على خصوصيته. الاعتماد على الاتصال أو
-          واتساب فقط.
-        </Text>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.whatsappButton]}
+            onPress={handleWhatsApp}
+          >
+            <Text style={styles.actionButtonText}>واتساب</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionButton, styles.mapButton]}
+            onPress={handleOpenMap}
+          >
+            <Text style={styles.actionButtonText}>الموقع على الخريطة</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* زر الحذف لصاحب الإعلان أو المدير */}
+      {(isOwner || isAdmin) && (
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={handleDelete}
+        >
+          <Text style={styles.deleteButtonText}>حذف الإعلان</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={{ height: 40 }} />
     </ScrollView>
@@ -237,107 +303,89 @@ export default function ListingDetailsScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 24,
-    backgroundColor: "#f5f5f5",
-  },
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
     padding: 16,
     backgroundColor: "#f5f5f5",
   },
-  imagesScroller: {
-    height: 260,
-    backgroundColor: "#000",
+  imagesRow: {
+    marginBottom: 12,
   },
   image: {
-    width: Platform.OS === "web" ? 400 : "100%",
-    height: 260,
-  },
-  imagePlaceholder: {
-    height: 220,
+    width: 220,
+    height: 150,
+    borderRadius: 8,
+    marginRight: 8,
     backgroundColor: "#ddd",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  section: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
-    backgroundColor: "#fff",
-    marginTop: 10,
   },
   title: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "700",
-    marginBottom: 4,
+    textAlign: "center",
+    marginBottom: 8,
   },
   price: {
     fontSize: 16,
     fontWeight: "700",
     color: "#1976d2",
-    marginBottom: 4,
+    textAlign: "center",
+    marginBottom: 12,
   },
-  meta: {
-    fontSize: 12,
-    color: "#555",
-  },
-  badgeAuction: {
-    marginTop: 8,
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: "#ffeb3b",
-  },
-  badgeAuctionText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#795548",
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#eee",
   },
   sectionTitle: {
     fontSize: 15,
     fontWeight: "700",
     marginBottom: 6,
   },
-  locationText: {
+  rowText: {
     fontSize: 13,
-    color: "#333",
-  },
-  locationNote: {
-    fontSize: 11,
-    color: "#777",
-    marginTop: 6,
+    marginBottom: 3,
   },
   description: {
-    fontSize: 13,
-    color: "#333",
+    fontSize: 14,
     lineHeight: 20,
   },
-  mainButton: {
-    backgroundColor: "#1976d2",
-    paddingVertical: 10,
+  buttonsRow: {
+    flexDirection: "row-reverse",
+    justifyContent: "space-between",
+    marginTop: 10,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 8,
     borderRadius: 6,
+    marginHorizontal: 3,
     alignItems: "center",
   },
-  mainButtonText: {
+  callButton: {
+    backgroundColor: "#1976d2",
+  },
+  whatsappButton: {
+    backgroundColor: "#25D366",
+  },
+  mapButton: {
+    backgroundColor: "#455a64",
+  },
+  actionButtonText: {
     color: "#fff",
     fontWeight: "700",
+    fontSize: 13,
   },
-  contactButton: {
-    marginTop: 8,
+  deleteButton: {
+    backgroundColor: "#d32f2f",
     paddingVertical: 10,
     borderRadius: 6,
+    marginTop: 8,
     alignItems: "center",
   },
-  contactButtonText: {
+  deleteButtonText: {
     color: "#fff",
-    fontWeight: "600",
-  },
-  smallHint: {
-    fontSize: 11,
-    color: "#777",
-    marginTop: 8,
+    fontWeight: "700",
+    fontSize: 14,
   },
 });
