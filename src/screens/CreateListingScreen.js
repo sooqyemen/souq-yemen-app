@@ -17,9 +17,12 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "../firebase";
 import * as Location from "expo-location"; // للموقع
 
-// رفع الصور من الجوال (Expo)
+// لو أعطاك خطأ expo-image-picker مو مثبت:
+// من التيرمنال:
+// npx expo install expo-image-picker
 let ImagePicker;
 if (Platform.OS !== "web") {
+  // نحمّله فقط في الجوال
   ImagePicker = require("expo-image-picker");
 }
 
@@ -43,7 +46,6 @@ const CATEGORIES = [
 export default function CreateListingScreen() {
   const navigation = useNavigation();
 
-  // بيانات أساسية
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
@@ -53,23 +55,18 @@ export default function CreateListingScreen() {
   const [phone, setPhone] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
 
-  // الموقع
-  const [locationLabel, setLocationLabel] = useState("");
+  // معلومات الموقع
+  const [locationLabel, setLocationLabel] = useState(""); // اسم الحي / القرية
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
   const [gettingLocation, setGettingLocation] = useState(false);
 
-  // المزاد
   const [isAuction, setIsAuction] = useState(false);
   const [auctionDays, setAuctionDays] = useState("1");
   const [auctionHours, setAuctionHours] = useState("0");
 
-  // الصور
   const [imageUrls, setImageUrls] = useState([]);
   const [uploading, setUploading] = useState(false);
-
-  // حالة الحفظ (عشان ما يتكرر)
-  const [saving, setSaving] = useState(false);
 
   const webFileInputRef = useRef(null);
 
@@ -174,7 +171,7 @@ export default function CreateListingScreen() {
     }
   };
 
-  // === استخدام موقعي الحالي ===
+  // استخدام موقعي الحالي
   const handleUseMyLocation = async () => {
     try {
       setGettingLocation(true);
@@ -197,6 +194,7 @@ export default function CreateListingScreen() {
       setLat(latitude);
       setLng(longitude);
 
+      // نحاول نجيب اسم المدينة / المنطقة
       const places = await Location.reverseGeocodeAsync({
         latitude,
         longitude,
@@ -206,7 +204,6 @@ export default function CreateListingScreen() {
         const p = places[0];
         const labelParts = [
           p.name,
-          p.subregion,
           p.city,
           p.region,
           p.country,
@@ -222,30 +219,14 @@ export default function CreateListingScreen() {
       Alert.alert("تم", "تم تحديد موقعك الحالي ✅");
     } catch (error) {
       console.error("location error", error);
-      Alert.alert("خطأ", "حدث خطأ أثناء جلب موقعك");
+      Alert.alert("خطأ", "تعذّر الحصول على موقعك الآن.");
     } finally {
       setGettingLocation(false);
     }
   };
 
-  // === فتح شاشة اختيار الموقع من الخريطة ===
-  const handleOpenLocationPicker = () => {
-    navigation.navigate("LocationPicker", {
-      initialLat: lat,
-      initialLng: lng,
-      initialLabel: locationLabel,
-      onLocationPicked: (data) => {
-        setLat(data.lat);
-        setLng(data.lng);
-        setLocationLabel(data.locationLabel || "");
-      },
-    });
-  };
-
-  // === حفظ الإعلان ===
+  // حفظ الإعلان في Firestore
   const handleSave = async () => {
-    if (saving) return; // منع التكرار لو الزر مضغوط أكثر من مرّة
-
     const user = auth.currentUser;
     if (!user) {
       Alert.alert("تسجيل الدخول", "يجب تسجيل الدخول قبل إضافة إعلان.");
@@ -272,8 +253,6 @@ export default function CreateListingScreen() {
     }
 
     try {
-      setSaving(true);
-
       const docRef = await addDoc(collection(db, "listings"), {
         title: title.trim(),
         description: description.trim(),
@@ -289,44 +268,22 @@ export default function CreateListingScreen() {
         isAuction,
         auctionEndsAt,
         status: "active",
+        // معلومات الموقع
         locationLabel: locationLabel.trim(),
         lat,
         lng,
       });
 
       console.log("listing saved with id:", docRef.id);
-
-      // ننظف الحقول عشان لو رجع للشاشة تكون فاضية
-      setTitle("");
-      setDescription("");
-      setPrice("");
-      setCity("");
-      setCategory("");
-      setPhone("");
-      setWhatsapp("");
-      setIsAuction(false);
-      setAuctionDays("1");
-      setAuctionHours("0");
-      setImageUrls([]);
-      setLocationLabel("");
-      setLat(null);
-      setLng(null);
-
-      // رسالة تأكيد + رجوع للرئيسية
       Alert.alert("تم", "تم حفظ الإعلان بنجاح ✅", [
         {
           text: "حسناً",
-          onPress: () => {
-            // نوديه لواجهة الرئيسية داخل التبويبات
-            navigation.navigate("Home");
-          },
+          onPress: () => navigation.goBack(),
         },
       ]);
     } catch (error) {
       console.error("save listing error", error);
       Alert.alert("خطأ", "حدث خطأ أثناء حفظ الإعلان");
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -338,7 +295,7 @@ export default function CreateListingScreen() {
       <Text style={styles.label}>عنوان الإعلان</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثال: شقة للإيجار في عدن..."
+        placeholder="مثال: شقة للإيجار في حي الأصبحي - صنعاء"
         value={title}
         onChangeText={setTitle}
       />
@@ -347,7 +304,7 @@ export default function CreateListingScreen() {
       <Text style={styles.label}>الوصف</Text>
       <TextInput
         style={[styles.input, styles.textArea]}
-        placeholder="اكتب تفاصيل الإعلان..."
+        placeholder="اكتب تفاصيل الإعلان، المميزات، الشروط..."
         value={description}
         onChangeText={setDescription}
         multiline
@@ -356,10 +313,10 @@ export default function CreateListingScreen() {
       {/* السعر + العملة */}
       <View style={styles.row}>
         <View style={{ flex: 1, marginLeft: 8 }}>
-          <Text style={styles.label}>السعر الأساسي</Text>
+          <Text style={styles.label}>السعر</Text>
           <TextInput
             style={styles.input}
-            placeholder="مثال: 150000"
+            placeholder="مثال: 300"
             keyboardType="numeric"
             value={price}
             onChangeText={setPrice}
@@ -424,8 +381,8 @@ export default function CreateListingScreen() {
             <Text
               style={[
                 styles.chipText,
-                category === c && styles.chipTextActive],
-              }
+                category === c && styles.chipTextActive,
+              ]}
             >
               {c}
             </Text>
@@ -433,49 +390,30 @@ export default function CreateListingScreen() {
         ))}
       </View>
 
-      {/* الموقع */}
-      <Text style={styles.label}>الموقع (اختياري)</Text>
+      {/* الموقع النصي */}
+      <Text style={styles.label}>الموقع التفصيلي (حي / قرية / شارع)</Text>
       <TextInput
         style={styles.input}
-        placeholder="مثال: تعز – الحوبان – قرب جولة القصر"
+        placeholder="مثلاً: حدة - جوار جولة الجامعة - صنعاء"
         value={locationLabel}
         onChangeText={setLocationLabel}
       />
 
-      <View style={styles.row}>
-        <View style={{ flex: 1, marginLeft: 8 }}>
-          <TouchableOpacity
-            style={[
-              styles.button,
-              gettingLocation && { opacity: 0.6 },
-            ]}
-            onPress={handleUseMyLocation}
-            disabled={gettingLocation}
-          >
-            <Text style={styles.buttonText}>
-              {gettingLocation
-                ? "جاري تحديد موقعك..."
-                : "استخدام موقعي الحالي"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-        <View style={{ flex: 1 }}>
-          <TouchableOpacity
-            style={styles.buttonSecondary}
-            onPress={handleOpenLocationPicker}
-          >
-            <Text style={styles.buttonSecondaryText}>
-              اختيار موقع من الخريطة
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {lat && lng ? (
-        <Text style={styles.locationCoords}>
-          الإحداثيات: {lat.toFixed(5)}, {lng.toFixed(5)}
-        </Text>
-      ) : null}
+      {/* زر استخدم موقعي (جوال فقط) */}
+      {Platform.OS !== "web" && (
+        <TouchableOpacity
+          style={[
+            styles.button,
+            gettingLocation && { opacity: 0.6 },
+          ]}
+          onPress={handleUseMyLocation}
+          disabled={gettingLocation}
+        >
+          <Text style={styles.buttonText}>
+            {gettingLocation ? "جاري تحديد موقعك..." : "استخدم موقعي الحالي"}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       {/* التواصل */}
       <Text style={styles.label}>رقم الجوال</Text>
@@ -495,9 +433,9 @@ export default function CreateListingScreen() {
         onChangeText={setWhatsapp}
       />
 
-      {/* المزاد */}
+      {/* المزايدة */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.label}>تفعيل نظام المزاد؟</Text>
+        <Text style={styles.label}>تفعيل المزاد؟</Text>
         <TouchableOpacity
           style={[styles.switchButton, isAuction && styles.switchOn]}
           onPress={() => setIsAuction(!isAuction)}
@@ -555,6 +493,7 @@ export default function CreateListingScreen() {
         </Text>
       </TouchableOpacity>
 
+      {/* عرض مصغرات الصور */}
       {imageUrls.length > 0 && (
         <ScrollView
           horizontal
@@ -572,14 +511,8 @@ export default function CreateListingScreen() {
       )}
 
       {/* زر الحفظ */}
-      <TouchableOpacity
-        style={[styles.saveButton, saving && { opacity: 0.6 }]}
-        onPress={handleSave}
-        disabled={saving}
-      >
-        <Text style={styles.saveButtonText}>
-          {saving ? "جاري حفظ الإعلان..." : "حفظ الإعلان"}
-        </Text>
+      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+        <Text style={styles.saveButtonText}>حفظ الإعلان</Text>
       </TouchableOpacity>
 
       <View style={{ height: 40 }} />
@@ -677,20 +610,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "600",
   },
-  buttonSecondary: {
-    backgroundColor: "#fff",
-    paddingVertical: 10,
-    borderRadius: 6,
-    marginTop: 6,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#0288d1",
-  },
-  buttonSecondaryText: {
-    color: "#0288d1",
-    fontWeight: "600",
-    fontSize: 13,
-  },
   thumbnail: {
     width: 80,
     height: 80,
@@ -709,10 +628,5 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 16,
-  },
-  locationCoords: {
-    fontSize: 12,
-    color: "#555",
-    marginTop: 4,
   },
 });
