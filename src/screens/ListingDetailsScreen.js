@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// src/screens/ListingDetailsScreen.js
+import React from "react";
 import {
   View,
   Text,
@@ -6,383 +7,337 @@ import {
   ScrollView,
   Image,
   TouchableOpacity,
-  ActivityIndicator,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Linking } from 'react-native';
+  Linking,
+  Alert,
+  Platform,
+} from "react-native";
+import { useRoute, useNavigation } from "@react-navigation/native";
 
-const ListingDetailsScreen = ({ route, navigation }) => {
-  const { listing: initialListing, listingId } = route.params || {};
-  const [listing, setListing] = useState(initialListing || null);
-  const [loading, setLoading] = useState(!initialListing);
-  const [rates, setRates] = useState(null);
-
-  // جلب بيانات الإعلان من Firestore لو ما وصلت كاملة من الصفحة السابقة
-  useEffect(() => {
-    const fetchListing = async () => {
-      if (initialListing || !listingId) return;
-
-      try {
-        setLoading(true);
-        const ref = doc(db, 'listings', listingId);
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          setListing({ id: snap.id, ...snap.data() });
-        }
-      } catch (err) {
-        console.error('Error fetching listing:', err);
-      } finally {
-        setLoading(false);
+function openExternalLink(url) {
+  if (!url) return;
+  Linking.canOpenURL(url)
+    .then((supported) => {
+      if (!supported) {
+        Alert.alert("تنبيه", "لا يمكن فتح هذا الرابط على جهازك.");
+      } else {
+        Linking.openURL(url);
       }
-    };
+    })
+    .catch(() => {
+      Alert.alert("خطأ", "حدث خطأ أثناء محاولة فتح الرابط.");
+    });
+}
 
-    fetchListing();
-  }, [initialListing, listingId]);
+export default function ListingDetailsScreen() {
+  const route = useRoute();
+  const navigation = useNavigation();
+  const { listing } = route.params || {};
 
-  // جلب أسعار الصرف من settings/rates
-  useEffect(() => {
-    const fetchRates = async () => {
-      try {
-        const ref = doc(db, 'settings', 'rates');
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          setRates(snap.data());
-        }
-      } catch (err) {
-        console.error('Error fetching rates:', err);
-      }
-    };
-
-    fetchRates();
-  }, []);
-
-  const priceInfo = useMemo(() => {
-    if (!listing || listing.price == null || !rates) return null;
-
-    const price = Number(listing.price) || 0;
-    const { usdToYer = 1632, sarToYer = 425 } = rates;
-
-    // تحويل إلى ريال يمني أولاً
-    let priceYer = 0;
-
-    if (listing.currency === 'SAR') {
-      priceYer = price * sarToYer;
-    } else if (listing.currency === 'USD') {
-      priceYer = price * usdToYer;
-    } else {
-      // YER
-      priceYer = price;
-    }
-
-    const priceSar = Math.round(priceYer / sarToYer);
-    const priceUsd = Math.round(priceYer / usdToYer);
-
-    return {
-      baseCurrency: listing.currency || 'YER',
-      basePrice: price,
-      yer: priceYer,
-      sar: priceSar,
-      usd: priceUsd,
-    };
-  }, [listing, rates]);
-
-  if (loading || !listing) {
+  if (!listing) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
-        <Text style={{ marginTop: 8 }}>جاري تحميل تفاصيل الإعلان...</Text>
+        <Text>لا توجد بيانات للإعلان.</Text>
+        <TouchableOpacity
+          style={[styles.mainButton, { marginTop: 16 }]}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.mainButtonText}>العودة</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
-  const mainImage =
-    listing.images && Array.isArray(listing.images) && listing.images.length > 0
-      ? listing.images[0]
-      : null;
+  const {
+    title,
+    description,
+    price,
+    currency,
+    city,
+    category,
+    phone,
+    whatsapp,
+    images,
+    locationLabel,
+    lat,
+    lng,
+    isAuction,
+  } = listing;
 
-  const statusText = listing.status === 'inactive' ? 'مخفي' : 'نشط';
+  // رقم السعر المنسّق
+  const priceText =
+    typeof price === "number" ? `${price.toLocaleString()} ${currency || ""}` : "";
 
-  const openPhone = () => {
-    if (!listing.phone) return;
-    Linking.openURL(`tel:${listing.phone}`);
-  };
-
-  const openWhatsApp = () => {
-    if (!listing.whatsApp && !listing.phone) return;
-    const number = String(listing.whatsApp || listing.phone).replace(
-      /[^\d]/g,
-      ''
-    );
-    const msg = encodeURIComponent('السلام عليكم، بخصوص إعلانك في سوق اليمن');
-    const url = `https://wa.me/${number}?text=${msg}`;
-    Linking.openURL(url);
-  };
-
-  const openMap = () => {
-    if (!listing.mapUrl) return;
-    Linking.openURL(listing.mapUrl);
-  };
-
-  const shareListing = () => {
-    try {
-      // في الويب نستغل window.location لو متوفر
-      if (typeof window !== 'undefined' && window.location) {
-        const url = window.location.href;
-        const text = `إعلان في سوق اليمن: ${listing.title}\n\n${url}`;
-
-        if (navigator.share) {
-          navigator.share({ title: listing.title, text, url });
-        } else if (navigator.clipboard) {
-          navigator.clipboard.writeText(url);
-          alert('تم نسخ رابط الإعلان، يمكنك لصقه وإرساله.');
-        } else {
-          alert('انسخ رابط الصفحة من شريط العنوان لمشاركته.');
-        }
-      } else {
-        alert('يمكنك مشاركة هذا الإعلان بنسخ رابط الصفحة من المتصفح.');
-      }
-    } catch (err) {
-      console.error('share error', err);
-      alert('تعذر مشاركة الإعلان حالياً.');
+  // رابط الاتصال
+  const handleCall = () => {
+    if (!phone) {
+      Alert.alert("تنبيه", "رقم الجوال غير متوفر.");
+      return;
     }
+    const telUrl = `tel:${phone}`;
+    openExternalLink(telUrl);
+  };
+
+  // رابط واتساب
+  const handleWhatsApp = () => {
+    if (!whatsapp && !phone) {
+      Alert.alert("تنبيه", "لا يوجد رقم واتساب أو جوال للتواصل.");
+      return;
+    }
+
+    let url = whatsapp;
+
+    if (!url) {
+      // نبني رابط من رقم الجوال
+      const digits = (phone || "").replace(/[^\d]/g, "");
+      if (!digits) {
+        Alert.alert("تنبيه", "رقم الجوال غير صالح لإنشاء رابط واتساب.");
+        return;
+      }
+      url = `https://wa.me/${digits}`;
+    }
+
+    openExternalLink(url);
+  };
+
+  // فتح الموقع في خرائط جوجل
+  const handleOpenInMaps = () => {
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      Alert.alert(
+        "تنبيه",
+        "لم يتم حفظ موقع هذا الإعلان على الخريطة. الرجاء استخدام زر (استخدام موقعي الحالي) عند إضافة الإعلان."
+      );
+      return;
+    }
+
+    const label = encodeURIComponent(locationLabel || title || "موقع الإعلان");
+    let url = "";
+
+    // نفس الرابط يعمل على الجوال والويب
+    url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${label}`;
+
+    openExternalLink(url);
   };
 
   return (
-    <ScrollView style={styles.container}>
-      {/* الصورة الرئيسية */}
-      {mainImage ? (
-        <Image
-          source={{ uri: mainImage }}
-          style={styles.mainImage}
-          resizeMode="cover"
-        />
+    <ScrollView contentContainerStyle={styles.container}>
+      {/* صور الإعلان */}
+      {Array.isArray(images) && images.length > 0 ? (
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          style={styles.imagesScroller}
+        >
+          {images.map((url, index) => (
+            <Image
+              key={index}
+              source={{ uri: url }}
+              style={styles.image}
+              resizeMode="cover"
+            />
+          ))}
+        </ScrollView>
       ) : (
-        <View style={[styles.mainImage, styles.mainImagePlaceholder]}>
-          <Text style={styles.mainImagePlaceholderText}>بدون صورة</Text>
+        <View style={styles.imagePlaceholder}>
+          <Text style={{ color: "#777" }}>لا توجد صور لهذا الإعلان</Text>
         </View>
       )}
 
-      <View style={styles.content}>
-        {/* العنوان */}
-        <Text style={styles.title}>{listing.title}</Text>
+      {/* العنوان والسعر */}
+      <View style={styles.section}>
+        <Text style={styles.title}>{title || "إعلان بدون عنوان"}</Text>
+        {priceText ? <Text style={styles.price}>{priceText}</Text> : null}
 
-        <Text style={styles.subTitle}>
-          {listing.city || 'غير محدد'} • {listing.category || 'قسم غير محدد'}
+        <Text style={styles.meta}>
+          {city ? `المدينة: ${city}` : "المدينة: غير محددة"} •{" "}
+          {category ? `القسم: ${category}` : "القسم: غير محدد"}
         </Text>
 
-        {/* السعر */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>السعر</Text>
-          {priceInfo ? (
-            <>
-              <Text style={styles.priceLine}>
-                العملة الأساسية ({priceInfo.baseCurrency}):{' '}
-                {priceInfo.basePrice}
-              </Text>
-              <Text style={styles.priceLine}>
-                {Math.round(priceInfo.yer)} ريال يمني
-              </Text>
-              <Text style={styles.priceLine}>
-                {priceInfo.sar} ريال سعودي
-              </Text>
-              <Text style={styles.priceLine}>${priceInfo.usd} دولار</Text>
-            </>
-          ) : (
-            <Text style={styles.priceLine}>لا توجد معلومات سعر كافية.</Text>
-          )}
-        </View>
-
-        {/* الوصف */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>الوصف</Text>
-          <Text style={styles.sectionBody}>
-            {listing.description || 'لا يوجد وصف لهذا الإعلان.'}
-          </Text>
-        </View>
-
-        {/* التواصل */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>التواصل</Text>
-
-          {listing.phone ? (
-            <View style={styles.contactRow}>
-              <Text style={styles.contactLabel}>رقم الجوال:</Text>
-              <Text style={styles.contactValue}>{listing.phone}</Text>
-            </View>
-          ) : (
-            <Text style={styles.sectionBody}>لم يتم إضافة رقم جوال.</Text>
-          )}
-
-          {/* أزرار الاتصال وواتساب */}
-          <View style={styles.contactActions}>
-            {listing.phone ? (
-              <TouchableOpacity style={styles.callButton} onPress={openPhone}>
-                <Ionicons name="call" size={18} color="#fff" />
-                <Text style={styles.callButtonText}>اتصال</Text>
-              </TouchableOpacity>
-            ) : null}
-
-            {(listing.whatsApp || listing.phone) && (
-              <TouchableOpacity
-                style={styles.whatsappButton}
-                onPress={openWhatsApp}
-              >
-                <Ionicons name="logo-whatsapp" size={18} color="#fff" />
-                <Text style={styles.callButtonText}>واتساب</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {/* زر عرض على الخريطة */}
-        {listing.mapUrl ? (
-          <View style={styles.section}>
-            <TouchableOpacity style={styles.mapButton} onPress={openMap}>
-              <Ionicons name="location-outline" size={18} color="#fff" />
-              <Text style={styles.mapButtonText}>عرض الموقع على الخريطة</Text>
-            </TouchableOpacity>
+        {/* حالة المزاد لو مفعّل */}
+        {isAuction ? (
+          <View style={styles.badgeAuction}>
+            <Text style={styles.badgeAuctionText}>إعلان بنظام المزاد</Text>
           </View>
         ) : null}
-
-        {/* حالة الإعلان */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>حالة الإعلان</Text>
-          <Text style={styles.sectionBody}>{statusText}</Text>
-        </View>
-
-        {/* مشاركة الإعلان */}
-        <View style={styles.section}>
-          <TouchableOpacity style={styles.shareButton} onPress={shareListing}>
-            <Ionicons name="share-social-outline" size={18} color="#fff" />
-            <Text style={styles.shareButtonText}>مشاركة الإعلان</Text>
-          </TouchableOpacity>
-        </View>
       </View>
+
+      {/* الموقع */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>الموقع</Text>
+
+        {locationLabel ? (
+          <Text style={styles.locationText}>📍 {locationLabel}</Text>
+        ) : (
+          <Text style={styles.locationText}>
+            لم يقم المعلن بتحديد وصف للموقع.
+          </Text>
+        )}
+
+        {typeof lat === "number" && typeof lng === "number" ? (
+          <TouchableOpacity
+            style={[styles.mainButton, { marginTop: 10 }]}
+            onPress={handleOpenInMaps}
+          >
+            <Text style={styles.mainButtonText}>
+              فتح الموقع في خرائط جوجل
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.locationNote}>
+            لا توجد إحداثيات محفوظة لهذا الإعلان. عند إضافة إعلان جديد يمكنك
+            استخدام زر "استخدام موقعي الحالي" لحفظ الموقع بدقة.
+          </Text>
+        )}
+      </View>
+
+      {/* وصف الإعلان */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>تفاصيل الإعلان</Text>
+        <Text style={styles.description}>
+          {description && description.trim().length > 0
+            ? description
+            : "لم يقم المعلن بكتابة وصف تفصيلي."}
+        </Text>
+      </View>
+
+      {/* طرق التواصل */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>طرق التواصل</Text>
+
+        {phone ? (
+          <TouchableOpacity
+            style={[styles.contactButton, { backgroundColor: "#388e3c" }]}
+            onPress={handleCall}
+          >
+            <Text style={styles.contactButtonText}>📞 اتصال على {phone}</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.locationNote}>
+            رقم الجوال غير متوفر في هذا الإعلان.
+          </Text>
+        )}
+
+        <TouchableOpacity
+          style={[styles.contactButton, { backgroundColor: "#25D366" }]}
+          onPress={handleWhatsApp}
+        >
+          <Text style={styles.contactButtonText}>💬 تواصل عبر واتساب</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.smallHint}>
+          لن نعرض بريد المعلن هنا حفاظاً على خصوصيته. الاعتماد على الاتصال أو
+          واتساب فقط.
+        </Text>
+      </View>
+
+      <View style={{ height: 40 }} />
     </ScrollView>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f4f4f4' },
-  mainImage: {
-    width: '100%',
-    height: 260,
-    backgroundColor: '#ddd',
+  container: {
+    paddingBottom: 24,
+    backgroundColor: "#f5f5f5",
   },
-  mainImagePlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mainImagePlaceholderText: {
-    color: '#666',
-  },
-  content: {
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
     padding: 16,
-    backgroundColor: '#fff',
-    marginTop: -10,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    backgroundColor: "#f5f5f5",
+  },
+  imagesScroller: {
+    height: 260,
+    backgroundColor: "#000",
+  },
+  image: {
+    width: Platform.OS === "web" ? 400 : "100%",
+    height: 260,
+  },
+  imagePlaceholder: {
+    height: 220,
+    backgroundColor: "#ddd",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  section: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
+    backgroundColor: "#fff",
+    marginTop: 10,
   },
   title: {
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: "700",
     marginBottom: 4,
   },
-  subTitle: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 12,
+  price: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1976d2",
+    marginBottom: 4,
   },
-  section: {
-    marginTop: 12,
-    borderTopWidth: 0.5,
-    borderTopColor: '#eee',
-    paddingTop: 10,
+  meta: {
+    fontSize: 12,
+    color: "#555",
+  },
+  badgeAuction: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: "#ffeb3b",
+  },
+  badgeAuctionText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#795548",
   },
   sectionTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 6,
   },
-  sectionBody: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 22,
+  locationText: {
+    fontSize: 13,
+    color: "#333",
   },
-  priceLine: {
-    fontSize: 14,
-    color: '#222',
-    marginBottom: 2,
+  locationNote: {
+    fontSize: 11,
+    color: "#777",
+    marginTop: 6,
   },
-  contactRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+  description: {
+    fontSize: 13,
+    color: "#333",
+    lineHeight: 20,
   },
-  contactLabel: {
-    fontWeight: '600',
-    color: '#555',
-  },
-  contactValue: {
-    color: '#222',
-  },
-  contactActions: {
-    flexDirection: 'row',
-    marginTop: 10,
-    gap: 8,
-  },
-  callButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#007bff',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 6,
-  },
-  whatsappButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#25D366',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 6,
-  },
-  callButtonText: {
-    color: '#fff',
-    marginLeft: 6,
-    fontWeight: '600',
-  },
-  mapButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#555',
-    paddingHorizontal: 16,
+  mainButton: {
+    backgroundColor: "#1976d2",
     paddingVertical: 10,
     borderRadius: 6,
+    alignItems: "center",
   },
-  mapButtonText: {
-    color: '#fff',
-    marginLeft: 6,
-    fontWeight: '600',
+  mainButtonText: {
+    color: "#fff",
+    fontWeight: "700",
   },
-  shareButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#444',
-    paddingHorizontal: 16,
+  contactButton: {
+    marginTop: 8,
     paddingVertical: 10,
     borderRadius: 6,
+    alignItems: "center",
   },
-  shareButtonText: {
-    color: '#fff',
-    marginLeft: 6,
-    fontWeight: '600',
+  contactButtonText: {
+    color: "#fff",
+    fontWeight: "600",
   },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  smallHint: {
+    fontSize: 11,
+    color: "#777",
+    marginTop: 8,
+  },
 });
-
-export default ListingDetailsScreen;
